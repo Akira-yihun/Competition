@@ -27,6 +27,8 @@ class PlayerTask:
     valid: bool
     score_reward: int
     gold_reward: int
+    cooldown_rounds: int
+    timeout_rounds: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,10 +105,20 @@ class Robot:
     robot_id: int
     pos: Pos
     health: int
+    kind: str
+    target_team: str
+    abnormal_state: str
 
     @classmethod
     def load(cls, raw: dict[str, Any]) -> "Robot":
-        return cls(int(raw["id"]), Pos.load(raw["pos"]), int(raw["health"]))
+        return cls(
+            int(raw["id"]),
+            Pos.load(raw["pos"]),
+            int(raw["health"]),
+            str(raw.get("roleType") or ""),
+            str(raw.get("targetTeam") or ""),
+            str(raw.get("abnormalState") or ""),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +126,7 @@ class Turn:
     round_no: int
     is_day: bool
     gold: int
+    team_type: str
     width: int
     height: int
     zones: dict[Pos, str]
@@ -123,6 +136,8 @@ class Turn:
     tasks: tuple[PlayerTask, ...]
     phase_task: str
     llm_response: str
+    vendor_prices: dict[str, int]
+    weapon_prices: dict[str, int]
 
     @classmethod
     def load(cls, payload: dict[str, Any]) -> "Turn":
@@ -133,6 +148,7 @@ class Turn:
             round_no,
             (round_no - 1) % ROUNDS_PER_DAY < DAY_ROUNDS,
             int(team.get("goldNum") or 0),
+            str(team.get("type") or ""),
             int(info["width"]),
             int(info["height"]),
             {
@@ -154,11 +170,15 @@ class Turn:
                     bool(task.get("isValid")),
                     int(task.get("scoreReward") or 0),
                     int(task.get("goldReward") or 0),
+                    int(task.get("coldDownRounds") or 0),
+                    int(task.get("timeoutRounds") or 0),
                 )
                 for task in team.get("playerTasks") or ()
             ),
             str(payload.get("phaseTask") or ""),
             str(payload.get("llmResp") or ""),
+            _prices(payload.get("vendorShopList") or ()),
+            _prices(payload.get("weaponShopList") or ()),
         )
 
     def station(self) -> Unit | None:
@@ -205,6 +225,9 @@ class Turn:
 
     def vendor(self) -> Pos | None:
         return next((pos for pos, kind in self.zones.items() if kind == "vendor"), None)
+
+    def weapon_shop(self) -> Pos | None:
+        return next((pos for pos, kind in self.zones.items() if kind == "weaponShop"), None)
 
     def footprint(self, unit: Unit) -> tuple[Pos, ...]:
         if unit.kind == STATION:
@@ -257,9 +280,32 @@ def sell_command(name: str, number: int) -> dict[str, Any]:
     return {"action": "sell", "name": name, "num": number}
 
 
+def buy_command(name: str, number: int = 1) -> dict[str, Any]:
+    return {"action": "buy", "name": name, "num": number}
+
+
+def use_command(name: str, target: Pos | None = None) -> dict[str, Any]:
+    command: dict[str, Any] = {"action": "use", "name": name}
+    if target is not None:
+        command["targetPos"] = [target.dump()]
+    return command
+
+
 def accept_task_command() -> dict[str, Any]:
     return {"action": "acceptTask"}
 
 
 def submit_answer_command(answer: str) -> dict[str, Any]:
     return {"action": "submitAnswer", "taskAnswer": answer}
+
+
+def _prices(items: Any) -> dict[str, int]:
+    prices: dict[str, int] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name") or item.get("itemName") or item.get("mineralName")
+        price = item.get("price") or item.get("unitPrice")
+        if name is not None and price is not None:
+            prices[str(name)] = int(price)
+    return prices

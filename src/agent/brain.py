@@ -1,3 +1,4 @@
+from itertools import permutations
 from typing import Any
 
 from .grid import next_step
@@ -11,6 +12,7 @@ from .protocol import (
     WEAPON_BUILD_COST,
     accept_task_command,
     attack_command,
+    buy_command,
     build_command,
     collect_command,
     distance,
@@ -18,11 +20,15 @@ from .protocol import (
     sell_command,
     station_footprint,
     submit_answer_command,
+    use_command,
 )
 
-TOWER_LOADOUT = ("gatling", "railgun", "rocket")
+TOWER_LOADOUT = ("rocket", "gatling", "railgun")
 STONE_BATCH = 5
-SELL_BATCH = 12
+SELL_BATCH = 8
+RETURN_BUFFER = 2
+MINERAL_TYPES = ("copper", "iron", "stone")
+UPGRADE_VOUCHERS = (("WeaponUpgradeVoucher1", 1, 100), ("WeaponUpgradeVoucher2", 2, 150))
 _NEIGHBOUR_STEPS = (
     (-1, -1), (-1, 0), (-1, 1),
     (0, -1), (0, 1),
@@ -56,6 +62,10 @@ def _day(turn: Turn, commands: dict[int, dict[str, Any]]) -> str:
     free_towers = [pos for pos in sites if pos not in standing_towers and pos not in occupied]
     free_walls = [pos for pos in _wall_order(turn) if pos not in standing_walls and pos not in occupied]
     for worker in turn.workers():
+        if _return_to_defense(turn, worker, claimed, commands):
+            continue
+        if _upgrade_weapon(turn, worker, claimed, commands):
+            continue
         _worker_day(turn, worker, sites, free_towers, free_walls, claimed, commands)
     return prompt
 
@@ -77,7 +87,14 @@ def _pioneer_day(turn: Turn, commands: dict[int, dict[str, Any]], claimed: set[P
     tasks = [task for task in turn.tasks if task.valid]
     if not tasks:
         return ""
-    task = max(tasks, key=lambda item: (item.score_reward + item.gold_reward, -distance(pioneer.pos, item.position)))
+    task = max(
+        tasks,
+        key=lambda item: (
+            (item.score_reward + item.gold_reward) / max(distance(pioneer.pos, item.position), 1),
+            item.timeout_rounds,
+            -item.cooldown_rounds,
+        ),
+    )
     if distance(pioneer.pos, task.position) <= 1:
         commands[pioneer.unit_id] = accept_task_command()
         return ""
@@ -114,8 +131,11 @@ def _worker_day(
 
 def _sell_if_ready(turn: Turn, worker: Unit, claimed: set[Pos], commands: dict[int, dict[str, Any]]) -> bool:
     vendor = turn.vendor()
-    minerals = [(name, worker.backpack.count(name)) for name in ("copper", "iron", "stone")]
-    name, count = max(minerals, key=lambda item: item[1])
+    minerals = [(name, worker.backpack.count(name)) for name in MINERAL_TYPES]
+    name, count = max(
+        minerals,
+        key=lambda item: (turn.vendor_prices.get(item[0], 1) * item[1], item[1]),
+    )
     if vendor is None or not count:
         return False
     if distance(worker.pos, vendor) <= 1:
@@ -134,10 +154,17 @@ def _mine(turn: Turn, worker: Unit, claimed: set[Pos], commands: dict[int, dict[
     if worker.backpack_full:
         return False
     mines = turn.stone_mines() if stone_only else turn.mines()
-    for mine in sorted((pos for pos in mines if pos not in claimed), key=lambda pos: (distance(worker.pos, pos), pos.x, pos.y)):
+    for mine in sorted(
+        mines,
+        key=lambda pos: (
+            -turn.vendor_prices.get(turn.zones.get(pos, ""), 1),
+            distance(worker.pos, pos),
+            pos.x,
+            pos.y,
+        ),
+    ):
         if distance(worker.pos, mine) <= 1:
             commands[worker.unit_id] = collect_command(mine)
-            claimed.add(mine)
             return True
         step = _step_toward(turn, worker, mine, claimed)
         if step is not None:
@@ -161,20 +188,34 @@ def _night(turn: Turn, commands: dict[int, dict[str, Any]]) -> None:
 
 
 def _tower_pairs(turn: Turn) -> tuple[tuple[Unit, Unit], ...]:
-    return tuple(zip(turn.controllable(), turn.weapons()))
+    roles = turn.controllable()
+    towers = turn.weapons()
+    count = min(len(roles), len(towers))
+    if not count:
+        return ()
+    best = min(
+        permutations(roles, count),
+        key=lambda assigned: sum(distance(role.pos, tower.pos) for role, tower in zip(assigned, towers)),
+    )
+    return tuple(zip(best, towers))
 
 
 def _attack_targets(turn: Turn, tower: Unit) -> list[Pos]:
-    reachable = [robot for robot in turn.robots if robot.health > 0 and distance(tower.pos, robot.pos) <= tower.range_of_attack()]
+    reachable = [
+        robot for robot in turn.robots
+        if robot.health > 0
+        and robot.target_team == turn.team_type
+        and distance(tower.pos, robot.pos) <= tower.range_of_attack()
+    ]
     if not reachable:
         return []
     station = turn.station()
-    def threat(robot: Any) -> tuple[int, int, int]:
+    def threat(robot: Any) -> tuple[int, int, int, int]:
         station_distance = distance(robot.pos, station.pos) if station else 99
-        return (station_distance, robot.health, robot.robot_id)
+        killable = robot.health <= _tower_damage(tower)
+        return (not killable, robot.abnormal_state == "dizzy", station_distance, robot.robot_id)
     if tower.kind == "rocket":
-        target = _best_rocket_target(turn, tower, reachable)
-        return [target] * max(tower.level, 1)
+        return _rocket_targets(turn, tower, reachable)
     ordered = sorted(reachable, key=threat)
     if tower.kind == "railgun":
         return [ordered[0].pos]
@@ -185,18 +226,72 @@ def _attack_targets(turn: Turn, tower: Unit) -> list[Pos]:
     dy = 0 if leader.pos.y == tower.pos.y else (1 if leader.pos.y > tower.pos.y else -1)
     same_cone = [robot for robot in ordered if (robot.pos.x - tower.pos.x) * dx >= 0 and (robot.pos.y - tower.pos.y) * dy >= 0]
     required = max(tower.level, 1)
-    if len(same_cone) < required:
-        return []
-    return [robot.pos for robot in same_cone[:required]]
+    targets = [robot.pos for robot in same_cone[:required]]
+    return targets + [leader.pos] * (required - len(targets))
 
 
-def _best_rocket_target(turn: Turn, tower: Unit, robots: list[Any]) -> Pos:
+def _rocket_targets(turn: Turn, tower: Unit, robots: list[Any]) -> list[Pos]:
     station = turn.station()
-    def value(candidate: Any) -> tuple[int, int, int]:
-        splash = sum(1 for robot in robots if distance(candidate.pos, robot.pos) <= 1)
+    def value(candidate: Any) -> tuple[int, int, int, int]:
+        splash_damage = sum(20 if robot.pos == candidate.pos else 10 for robot in robots if distance(candidate.pos, robot.pos) <= 1)
         station_distance = distance(candidate.pos, station.pos) if station else 99
-        return (splash, -station_distance, -candidate.health)
-    return max(robots, key=value).pos
+        kill_score = sum(1 for robot in robots if distance(candidate.pos, robot.pos) <= 1 and robot.health <= (20 if robot.pos == candidate.pos else 10))
+        return (kill_score, splash_damage, -station_distance, -candidate.robot_id)
+    ordered = sorted(robots, key=value, reverse=True)
+    shots = max(tower.level, 1)
+    return [robot.pos for robot in ordered[:shots]] + [ordered[0].pos] * max(0, shots - len(ordered))
+
+
+def _tower_damage(tower: Unit) -> int:
+    if tower.kind == "gatling":
+        return 10
+    if tower.kind == "railgun":
+        return 10 * max(tower.level, 1)
+    return 20
+
+
+def _return_to_defense(turn: Turn, worker: Unit, claimed: set[Pos], commands: dict[int, dict[str, Any]]) -> bool:
+    remaining = 70 - ((turn.round_no - 1) % 130)
+    if remaining <= 0 or turn.phase_task:
+        return False
+    pairs = _tower_pairs(turn)
+    target = next((tower for role, tower in pairs if role.unit_id == worker.unit_id), None)
+    if target is None or distance(worker.pos, target.pos) + RETURN_BUFFER < remaining:
+        return False
+    step = _step_toward(turn, worker, target.pos, claimed)
+    if step is not None:
+        commands[worker.unit_id] = move_command(step)
+    return True
+
+
+def _upgrade_weapon(turn: Turn, worker: Unit, claimed: set[Pos], commands: dict[int, dict[str, Any]]) -> bool:
+    towers = turn.weapons()
+    if len(towers) < 3:
+        return False
+    target = next((tower for tower in towers if tower.kind == "rocket"), towers[0])
+    for voucher, required_level, _ in UPGRADE_VOUCHERS:
+        if voucher in worker.backpack and target.level == required_level:
+            if distance(worker.pos, target.pos) <= 1:
+                commands[worker.unit_id] = use_command(voucher, target.pos)
+                return True
+            step = _step_toward(turn, worker, target.pos, claimed)
+            if step is not None:
+                commands[worker.unit_id] = move_command(step)
+            return True
+    shop = turn.weapon_shop()
+    if shop is None:
+        return False
+    for voucher, required_level, fallback_price in UPGRADE_VOUCHERS:
+        price = turn.weapon_prices.get(voucher, fallback_price)
+        if target.level == required_level and turn.gold >= price and voucher in turn.weapon_prices:
+            if distance(worker.pos, shop) <= 1:
+                commands[worker.unit_id] = buy_command(voucher)
+                return True
+            step = _step_toward(turn, worker, shop, claimed)
+            if step is not None:
+                commands[worker.unit_id] = move_command(step)
+            return True
+    return False
 
 
 def _build_or_walk(turn: Turn, worker: Unit, target: Pos, name: str, claimed: set[Pos], commands: dict[int, dict[str, Any]]) -> None:
