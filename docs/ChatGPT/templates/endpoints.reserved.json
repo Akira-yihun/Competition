@@ -1,0 +1,192 @@
+{
+  "schema_version": "1.0",
+  "status": "unconfigured",
+  "base_url": null,
+  "auth": {
+    "scheme": null,
+    "secret_ref": null
+  },
+  "billing": {
+    "currency": null,
+    "upload_cost": null,
+    "build_cost": null,
+    "match_cost": null,
+    "confirmed": false
+  },
+  "capabilities": {
+    "server_idempotency": null,
+    "operation_lookup": null,
+    "automatic_two_halves": null,
+    "seed_control": null,
+    "opponent_version_pin": null,
+    "log_finalization_signal": null,
+    "automatic_build": null
+  },
+  "endpoints": {
+    "upload_artifact": {
+      "required": true,
+      "mutating": true,
+      "method": null,
+      "path": null,
+      "request_mapping": null,
+      "response_mapping": null,
+      "pagination": null,
+      "success_codes": null,
+      "idempotency_header": null
+    },
+    "lookup_operation": {
+      "required": false,
+      "mutating": false,
+      "method": null,
+      "path": null,
+      "request_mapping": null,
+      "response_mapping": null,
+      "pagination": null,
+      "success_codes": null,
+      "idempotency_header": null
+    },
+    "get_build": {
+      "required": true,
+      "mutating": false,
+      "method": null,
+      "path": null,
+      "request_mapping": null,
+      "response_mapping": null,
+      "pagination": null,
+      "success_codes": null,
+      "idempotency_header": null
+    },
+    "create_match": {
+      "required": true,
+      "mutating": true,
+      "method": null,
+      "path": null,
+      "request_mapping": null,
+      "response_mapping": null,
+      "pagination": null,
+      "success_codes": null,
+      "idempotency_header": null
+    },
+    "get_match": {
+      "required": true,
+      "mutating": false,
+      "method": null,
+      "path": null,
+      "request_mapping": null,
+      "response_mapping": null,
+      "pagination": null,
+      "success_codes": null,
+      "idempotency_header": null
+    },
+    "list_half_results": {
+      "required": true,
+      "mutating": false,
+      "method": null,
+      "path": null,
+      "request_mapping": null,
+      "response_mapping": null,
+      "pagination": null,
+      "success_codes": null,
+      "idempotency_header": null
+    },
+    "get_logs": {
+      "required": true,
+      "mutating": false,
+      "method": null,
+      "path": null,
+      "request_mapping": null,
+      "response_mapping": null,
+      "pagination": null,
+      "success_codes": null,
+      "idempotency_header": null
+    },
+    "start_build": {
+      "required": false,
+      "mutating": true,
+      "method": null,
+      "path": null,
+      "request_mapping": null,
+      "response_mapping": null,
+      "pagination": null,
+      "success_codes": null,
+      "idempotency_header": null,
+      "required_when": "capabilities.automatic_build is false"
+    }
+  },
+  "normalized_contract": {
+    "upload_artifact": [
+      "submission_id",
+      "artifact_id",
+      "build_id",
+      "artifact_sha256",
+      "hash_source"
+    ],
+    "lookup_operation": [
+      "found",
+      "operation_status",
+      "resource_ids"
+    ],
+    "get_build": [
+      "build_id",
+      "status",
+      "diagnostics_url"
+    ],
+    "create_match": [
+      "match_id",
+      "candidate_submission_id",
+      "opponent_submission_id",
+      "half_ids"
+    ],
+    "get_match": [
+      "match_id",
+      "status",
+      "half_ids",
+      "is_complete_match",
+      "official_outcome",
+      "participant_submission_ids",
+      "terminal_reason"
+    ],
+    "list_half_results": [
+      "half_id",
+      "side",
+      "official_outcome",
+      "score",
+      "terminal_reason"
+    ],
+    "get_logs": [
+      "half_id",
+      "pages",
+      "finalized",
+      "content_sha256",
+      "provenance",
+      "platform_team_id",
+      "platform_submission_id",
+      "pagination_cursor"
+    ],
+    "start_build": [
+      "submission_id",
+      "build_id"
+    ]
+  },
+  "status_mapping": {
+    "build": {
+      "pending": null,
+      "success": null,
+      "failed": null,
+      "cancelled": null
+    },
+    "match": {
+      "pending": null,
+      "running": null,
+      "completed": null,
+      "failed": null,
+      "cancelled": null
+    }
+  },
+  "configuration_notes": [
+    "本文件是待实现适配器的配置契约，不是平台真实API。",
+    "若无operation lookup且无服务端幂等，未知写请求结果必须人工核对。lookup端点不可用需明确声明不支持，不能填虚构URL。",
+    "归档不包含认证头、cookie或访问令牌；secret_ref只存安全存储引用。",
+    "分页不适用要显式填写none；日志是混流还是按队伍返回须由实际接口确认。"
+  ]
+}

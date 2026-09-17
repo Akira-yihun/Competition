@@ -1,0 +1,135 @@
+{
+  "schema_version": "1.0",
+  "mode": "design_only",
+  "platform_writes_enabled": false,
+  "project_root": "../../..",
+  "archive_root": "..",
+  "endpoints_file": "endpoints.reserved.json",
+  "baseline": {
+    "git_root": "../../..",
+    "commit": null,
+    "require_clean_allowed_paths": true,
+    "existing_user_changes_policy": "preserve_and_isolate",
+    "remote_push_enabled": false
+  },
+  "agent_cli": {
+    "executable": null,
+    "arguments": null,
+    "model": null,
+    "credential_ref": null,
+    "input_contract": "iteration_id, objective, hypothesis, baseline_commit, allowed_paths, evidence_paths, checks, budgets",
+    "output_contract": [
+      "status",
+      "summary",
+      "changed_files",
+      "checks",
+      "evidence_paths",
+      "remaining_risks"
+    ]
+  },
+  "allowed_code_paths": [
+    "main3.py",
+    "src/agent/",
+    "pyproject.toml",
+    "run.sh",
+    "tests/"
+  ],
+  "package": {
+    "format": null,
+    "entrypoint": null,
+    "layout_confirmed": false,
+    "allowlist": null,
+    "forbidden": [
+      ".git",
+      "docs",
+      "private_keys",
+      "credentials",
+      ".env"
+    ],
+    "deterministic": true,
+    "sha256_required": true
+  },
+  "checks": {
+    "commands": null,
+    "suggested_local_p99_ms": 1000,
+    "protocol_error_limit": 0,
+    "crash_limit": 0,
+    "crypto_integrity_required": true
+  },
+  "evaluation": {
+    "unit": "complete_two_half_match",
+    "opponents": [
+      {
+        "role": "current_baseline",
+        "submission_id": null
+      },
+      {
+        "role": "defense",
+        "submission_id": null
+      },
+      {
+        "role": "task_score",
+        "submission_id": null
+      }
+    ],
+    "smoke_complete_matches": 2,
+    "screening_blocks_per_opponent": 4,
+    "confirmation_blocks_per_opponent": 10,
+    "arms": [
+      "candidate",
+      "baseline"
+    ],
+    "block_definition": "both arms against the same pinned opponent; same seed when supported",
+    "confirmation_expected_complete_matches": 60,
+    "seed_plan": null,
+    "execution_order_seed": null,
+    "primary_metric": "mean_match_points_delta",
+    "match_points": {
+      "win": 3,
+      "draw": 1,
+      "loss": 0
+    },
+    "confidence_level": 0.95,
+    "promotion_rule": "independent_confirmation_ci_lower_gt_zero_and_all_hard_gates_pass",
+    "insufficient_evidence": "keep_baseline",
+    "sequential_early_promotion": false
+  },
+  "budgets": {
+    "confirmed": false,
+    "currency": null,
+    "max_total_cost": null,
+    "max_agent_tokens": null,
+    "max_agent_calls": null,
+    "max_iterations": null,
+    "max_upload_operations": null,
+    "max_build_operations": null,
+    "max_match_operations": null,
+    "max_agent_call_seconds": null,
+    "max_iteration_seconds": null,
+    "max_compile_wait_seconds": null,
+    "max_match_wait_seconds": null,
+    "max_log_wait_seconds": null,
+    "max_repair_attempts": 2
+  },
+  "polling": {
+    "initial_seconds": 5,
+    "max_seconds": 60,
+    "jitter": true,
+    "respect_retry_after": true,
+    "max_read_retries": 6,
+    "retry_unknown_writes": false
+  },
+  "state": {
+    "single_writer": true,
+    "atomic_write": true,
+    "intent_before_write": true,
+    "reconcile_before_retry": true,
+    "unknown_write_result": "BLOCKED_RECONCILIATION"
+  },
+  "secrets": {
+    "log_public_key_id": null,
+    "log_private_key_ref": null,
+    "never_archive_private_key": true
+  },
+  "path_resolution": "all configuration file paths are relative to this template directory; allowed_code_paths and package allowlist relative to project_root"
+}

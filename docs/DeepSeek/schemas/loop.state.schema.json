@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loop.state.schema.json",
+  "title": "loopctl 状态文件（loop/state/loop_state.json）",
+  "description": "唯一真相源。迁移时先写 .tmp 再 os.replace 原子替换；所有动作另追加进 journal.jsonl。runs/<iter>/iter.json 只是只读快照。",
+  "type": "object",
+  "required": ["schema", "active_iter", "state", "updated_at"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {"const": "fwloop.state/1"},
+    "active_iter": {"type": ["string", "null"]},
+    "state": {
+      "description": "与 02 文档 §3.1 的状态图完全一致（含 BUILD_FAILED/BUILD_STUCK/MATCH_STUCK）",
+      "enum": ["IDLE", "NEW", "EDITED", "GUARDED", "COMMITTED", "PACKAGED", "UPLOADED",
+               "BUILD_PENDING", "BUILD_OK", "BUILD_FAILED", "BUILD_STUCK",
+               "BATTLE_PENDING", "BATTLE_RUNNING", "MATCH_DONE", "MATCH_STUCK",
+               "LOGS_FETCHED", "ANALYZED", "DECIDED", "CLOSED",
+               "FAILED", "BLOCKED", "NEEDS_HUMAN"]
+    },
+    "updated_at": {"type": "string"},
+    "blocked_reason": {
+      "type": ["string", "null"],
+      "enum": ["config.unfilled", "config.missing_file", "auth.failed", "auth.expired",
+               "guard.failed", "no_change", "build.failed", "build.stuck", "match.stuck",
+               "platform.rejected", "platform.empty", "quota.exceeded", "budget.exceeded",
+               "log.channel_missing", "log.verify_failed", "stats.insufficient",
+               "protected_path.touched", "experiment.violation", null]
+    },
+    "human_action": {"type": ["string", "null"], "description": "给人看的一句话（blocked 时必填）"},
+    "needs_human": {"type": "boolean"},
+    "resume_from": {"type": ["string", "null"], "description": "BLOCKED/NEEDS_HUMAN 恢复时从哪个 verb 续跑"},
+    "attempts": {"type": "object", "additionalProperties": {"type": "integer"}},
+    "next_actions": {
+      "type": "array",
+      "description": "结构化（不是裸字符串），Agent 可直接照抄 verb 与 args",
+      "items": {
+        "type": "object", "required": ["verb"], "additionalProperties": false,
+        "properties": {
+          "verb": {"enum": ["doctor", "iter.open", "iter.guard", "iter.commit", "iter.build",
+                            "iter.upload", "iter.await-build", "iter.battle", "iter.await-match",
+                            "iter.fetch-logs", "iter.analyze", "iter.decide", "iter.close",
+                            "approve", "auth.refresh", "resume", "board", "backlog.next",
+                            "backlog.add", "experiment.run", "fixture.replay", "calibrate",
+                            "human.report", "abort"]},
+          "args": {"type": "object", "additionalProperties": {"type": ["string", "number", "boolean", "null"]}}
+        }
+      }
+    },
+    "profile": {"enum": ["standard", "experiment"], "description": "experiment 允许刻意违规且不进 scoreboard"},
+    "budget": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "day_key": {"type": "string"},
+        "uploads_today": {"type": "integer"}, "matches_today": {"type": "integer"},
+        "iters_today": {"type": "integer"}, "wall_clock_h": {"type": "number"},
+        "quota_remaining": {"type": ["integer", "null"], "description": "来自 team.info，优先于本地计数"}
+      }
+    },
+    "approvals": {
+      "type": "object",
+      "description": "审批绑定到产物哈希：改码换包后审批自动失效",
+      "additionalProperties": {
+        "type": "object", "required": ["step", "artifact_sha256", "at"],
+        "properties": {"step": {"enum": ["upload", "match"]},
+                       "artifact_sha256": {"type": "string"},
+                       "at": {"type": "string"}, "by": {"type": "string"}}
+      }
+    },
+    "iters": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["id", "hypothesis_id", "state", "branch", "base_tag", "created_at"],
+        "properties": {
+          "id": {"type": "string"}, "hypothesis_id": {"type": "string"},
+          "hypothesis_title": {"type": "string"}, "state": {"type": "string"},
+          "branch": {"type": "string"}, "base_tag": {"type": ["string", "null"]},
+          "baseline_iter": {"type": ["string", "null"]},
+          "commit": {"type": ["string", "null"]}, "rollback_tag": {"type": ["string", "null"]},
+          "artifact": {"type": ["object", "null"], "properties": {
+            "path": {"type": "string"}, "sha256": {"type": "string"},
+            "bytes": {"type": "integer"}, "version": {"type": "string"}}},
+          "build_id": {"type": ["string", "null"]},
+          "build_retry_no": {"type": "integer"},
+          "match_ids": {"type": "array", "items": {"type": "string"}},
+          "batch_index": {"type": "integer", "description": "need_more 追加样本时递增；幂等键含它"},
+          "samples": {"type": "integer"},
+          "decision": {"enum": ["accept", "revert", "need_more", "inconclusive", "baseline", null]},
+          "decision_reason": {"type": ["string", "null"]},
+          "created_at": {"type": "string"}, "closed_at": {"type": ["string", "null"]},
+          "timings": {"type": "object"},
+          "receipts": {
+            "type": "object",
+            "description": "step → {phase: intent|done, key: 幂等键, at: 时间, result: 历史返回值}。intent 在发请求前写，done 在成功后写；resume 时 intent 无 done ⇒ 必须先对账再决定是否重发。",
+            "additionalProperties": {"type": "object", "required": ["phase", "key", "at"],
+                                     "properties": {"phase": {"enum": ["intent", "done"]},
+                                                    "key": {"type": "string"}, "at": {"type": "string"},
+                                                    "source": {"enum": ["fresh", "receipt", "reconcile"]}}}
+          }
+        }
+      }
+    },
+    "backlog": {
+      "type": "object",
+      "properties": {
+        "pending": {"type": "array", "items": {"type": "object", "required": ["id", "title"]}},
+        "done": {"type": "array", "items": {"type": "object"}},
+        "quarantine": {"type": "array", "items": {"type": "object"}}
+      }
+    },
+    "best": {
+      "type": ["object", "null"],
+      "properties": {"iter_id": {"type": "string"}, "tag": {"type": "string"},
+                     "build_id": {"type": "string"}, "metric": {"type": "number"}}
+    },
+    "noise": {
+      "type": ["object", "null"],
+      "description": "由 loopctl calibrate 生成；icc 越高表示同场上下半场相关性越强、有效样本量越小",
+      "properties": {"metric": {"type": "string"}, "n_matches": {"type": "integer"},
+                     "n_halves": {"type": "integer"}, "mean": {"type": "number"},
+                     "std": {"type": "number"}, "icc": {"type": "number"},
+                     "floor": {"type": "number"}, "enough": {"type": "boolean"},
+                     "measured_at": {"type": "string"}}
+    }
+  }
+}

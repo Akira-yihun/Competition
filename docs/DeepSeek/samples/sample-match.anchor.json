@@ -1,0 +1,9 @@
+{
+  "schema": "fwlog.anchor/1",
+  "run_id": "rdemo0001-00000000",
+  "kid": "e3a819177678f61c",
+  "alg": "hmac-aead-v1",
+  "count": 14,
+  "first_chain": "zV_pEAGJyuLW5GsqixGDeQ",
+  "last_chain": "-3o0ZE15p5BlQAuAzNrEng"
+}

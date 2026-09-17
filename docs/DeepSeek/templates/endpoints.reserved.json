@@ -1,0 +1,212 @@
+{
+  "$comment": "预留接口清单：把 endpoints 对象整体拷进 loop/config/loop.config.json 的 platform.endpoints，再把 '__FILL__' 替换成真实值。loopctl doctor --probe 会逐条校验未填项、连通性、业务码与关键字段。",
+  "schema": "fwloop.endpoints/1",
+  "how_to_fill": {
+    "path": "路径模板用 {placeholders} 占位；query 直接写在 path 里。",
+    "response_map": "极简 JSONPath：$.a.b 取值、$.a[0].b 取数组首元素、$ 表示整个响应体。null 表示不需要。",
+    "success_when": "★ 成功判定：先看业务码再看 HTTP 码。缺失时用 defaults.success_when。",
+    "required_fields": "★ fail-closed：这些 DTO 字段取不到 ⇒ blocked_reason=platform.empty，绝不带 None 继续。",
+    "items_map": "★ 列表端点必须有：把数组元素的字段映射成 DTO（否则 resume 对账与 DTO 生成都不可实现）。",
+    "pagination": "★ 列表端点必须有：否则只回第一页会让对账误判'没上传过'从而重复上传。",
+    "idempotency": "★ 请求侧幂等：把幂等键放进 header 或 body（仅本地字段名不算幂等）。"
+  },
+
+  "defaults": {
+    "success_when": {"code_path": "$.code", "ok_values": [0, 200, "0", "SUCCESS"], "http_ok": [200, 201, 202]},
+    "error_paths": ["$.message", "$.msg", "$.error", "$.data.message"],
+    "rate_limit": {"status": [429], "retry_after_header": "Retry-After", "base_backoff_s": 2, "max_backoff_s": 120, "jitter": true},
+    "retries": {"network": 3, "server_5xx": 3, "business_error": 0},
+    "timeout_s": 30
+  },
+
+  "endpoints": {
+    "auth.login": {
+      "purpose": "登录换取 token / 建立会话 Cookie",
+      "method": "POST", "path": "__FILL__",
+      "headers": {"Content-Type": "application/json"},
+      "body": {"username": "{env:FW_PLATFORM_USER}", "password": "{env:FW_PLATFORM_PASS}"},
+      "response_map": {"token": "$.data.token", "expires_at": "$.data.expiresAt"},
+      "required_fields": ["token"],
+      "poll": false
+    },
+    "auth.refresh": {
+      "purpose": "刷新凭据",
+      "method": "POST", "path": "__FILL__",
+      "body": {"refresh_token": "{token}"},
+      "response_map": {"token": "$.data.token", "expires_at": "$.data.expiresAt"},
+      "required_fields": ["token"],
+      "poll": false
+    },
+    "team.info": {
+      "purpose": "我方队伍 id/名称/阵营 + 剩余额度（有则读它，优先于本地计数）",
+      "method": "GET", "path": "__FILL__",
+      "response_map": {"team_id": "$.data.teamId", "team_name": "$.data.teamName", "quota": "$.data.quota"},
+      "required_fields": ["team_id"],
+      "poll": false
+    },
+    "opponent.list": {
+      "purpose": "可选对手/训练机器人列表（用于固定对手做 A/B）",
+      "method": "GET", "path": "__FILL__",
+      "query": {"page": "{page}", "size": "{size}"},
+      "response_map": {"items": "$.data.list"},
+      "items_map": {"id": "id", "name": "name", "rating": "rating"},
+      "pagination": {"mode": "page", "page_param": "page", "size_param": "size", "total_path": "$.data.total", "max_pages": 20},
+      "poll": false
+    },
+    "artifact.upload": {
+      "purpose": "上传源码包并触发编译",
+      "method": "POST", "path": "__FILL__", "content_type": "multipart/form-data",
+      "form": {"file": "{artifact}", "teamId": "{team_id}", "version": "{version}", "sha256": "{artifact_sha256}"},
+      "headers": {"X-Idempotency-Key": "{artifact_sha256}"},
+      "response_map": {"upload_id": "$.data.uploadId", "build_id": "$.data.buildId"},
+      "required_fields": ["build_id"],
+      "idempotency": {"key": "{artifact_sha256}", "where": "header", "header": "X-Idempotency-Key"},
+      "poll": false
+    },
+    "build.status": {
+      "purpose": "查询编译状态（含产物 sha，用于对账与身份校验）",
+      "method": "GET", "path": "__FILL__", "query": {"buildId": "{build_id}"},
+      "response_map": {"status": "$.data.status", "log_url": "$.data.logUrl",
+                       "duration_s": "$.data.durationSeconds", "artifact_sha256": "$.data.artifactSha256"},
+      "required_fields": ["status"],
+      "status_vocab": {
+        "pending": ["PENDING", "WAITING", "QUEUED", "0", "1"],
+        "compiling": ["COMPILING", "BUILDING", "RUNNING", "2"],
+        "success": ["SUCCESS", "OK", "FINISHED", "PASS", "3"],
+        "failed": ["FAILED", "ERROR", "FAIL", "4", "-1"]
+      },
+      "poll": true
+    },
+    "build.log": {
+      "purpose": "取编译日志正文（失败时给 Agent 自动修复用）",
+      "method": "GET", "path": "__FILL__", "query": {"buildId": "{build_id}"},
+      "response_map": {"text": "$.data.log"},
+      "poll": false
+    },
+    "build.list": {
+      "purpose": "★ 最近编译记录（resume 对账用：崩溃前是否已经上传过）",
+      "method": "GET", "path": "__FILL__",
+      "query": {"teamId": "{team_id}", "page": "{page}", "size": "{size}"},
+      "response_map": {"items": "$.data.list"},
+      "items_map": {"build_id": "buildId", "status": "status", "created_at": "createdAt",
+                    "artifact_sha256": "sha256", "version": "version"},
+      "pagination": {"mode": "page", "page_param": "page", "size_param": "size", "total_path": "$.data.total", "max_pages": 10},
+      "poll": false
+    },
+    "match.create": {
+      "purpose": "创建对战（支持批量 count 场；每场含上下半场）",
+      "method": "POST", "path": "__FILL__",
+      "body": {"buildId": "{build_id}", "opponentId": "{opponent_id}", "count": "{count}",
+               "seed": "{seed}", "mode": "{mode}"},
+      "headers": {"X-Idempotency-Key": "{battle_idempotency_key}"},
+      "response_map": {"match_ids": "$.data.matchIds"},
+      "required_fields": ["match_ids"],
+      "idempotency": {"key": "{battle_idempotency_key}", "where": "header", "header": "X-Idempotency-Key",
+                      "note": "key 必须含 build_id + count + opponent_id + seed + batch_index"},
+      "poll": false
+    },
+    "match.status": {
+      "purpose": "查询对战状态与进度",
+      "method": "GET", "path": "__FILL__", "query": {"matchId": "{match_id}"},
+      "response_map": {"status": "$.data.status", "progress": "$.data.progress",
+                       "started_at": "$.data.startedAt", "ended_at": "$.data.endedAt"},
+      "required_fields": ["status"],
+      "status_vocab": {
+        "pending": ["PENDING", "WAITING", "QUEUED", "0"],
+        "running": ["RUNNING", "PLAYING", "1", "2"],
+        "finished": ["FINISHED", "DONE", "ENDED", "3"],
+        "failed": ["FAILED", "ERROR", "-1"]
+      },
+      "poll": true
+    },
+    "match.result": {
+      "purpose": "取对战比分结果（含 seed/opponent 回显，用于验证配对性与公平性）",
+      "method": "GET", "path": "__FILL__", "query": {"matchId": "{match_id}"},
+      "response_map": {"winner": "$.data.winner", "total_score_us": "$.data.ourTotalScore",
+                       "total_score_enemy": "$.data.enemyTotalScore",
+                       "seed": "$.data.seed", "opponent": "$.data.opponentId",
+                       "halves": "$.data.halves"},
+      "required_fields": ["halves"],
+      "halves_map": {"half_no": "halfNo", "side": "side", "our_score": "ourScore",
+                     "enemy_score": "enemyScore", "s1": "score1", "s2": "score2", "s3": "score3",
+                     "winner": "winner", "ended_reason": "endReason", "rounds": "rounds",
+                     "base_destroyed": "baseDestroyed"},
+      "poll": false
+    },
+    "match.list": {
+      "purpose": "★ 历史对战列表（对账：崩溃前是否已经开过局）",
+      "method": "GET", "path": "__FILL__",
+      "query": {"teamId": "{team_id}", "page": "{page}", "size": "{size}"},
+      "response_map": {"items": "$.data.list"},
+      "items_map": {"match_id": "matchId", "build_id": "buildId", "status": "status",
+                    "created_at": "createdAt", "opponent": "opponentId"},
+      "pagination": {"mode": "page", "page_param": "page", "size_param": "size", "total_path": "$.data.total", "max_pages": 10},
+      "poll": false
+    },
+    "match.cancel": {
+      "purpose": "取消卡死的对战（stuck 时用，避免干等）",
+      "method": "POST", "path": "__FILL__", "body": {"matchId": "{match_id}"},
+      "response_map": {"ok": "$.data.ok"},
+      "poll": false
+    },
+    "logs.list": {
+      "purpose": "取某场对战的日志文件清单与下载地址",
+      "method": "GET", "path": "__FILL__", "query": {"matchId": "{match_id}", "half": "{half_no}"},
+      "response_map": {"files": "$.data.files"},
+      "files_map": {"name": "name", "url": "url", "file_id": "fileId", "sha256": "sha256", "bytes": "size"},
+      "poll": false
+    },
+    "logs.download": {
+      "purpose": "下载日志正文（预签名 URL 或带鉴权的二进制流）",
+      "method": "GET", "path": "__FILL__", "query": {"fileId": "{file_id}"},
+      "response_map": {"path": "$.data.path", "url": "$.data.url"},
+      "auth": "signed_url_or_bearer",
+      "poll": false
+    },
+    "logs.upload": {
+      "purpose": "日志上报（sink.mode=http 时使用；双方共用同一接口，平台无需密钥）",
+      "method": "POST", "path": "__FILL__", "content_type": "application/x-ndjson",
+      "headers": {"X-Fwlog-Schema": "fwlog.frame/1", "X-Fwlog-Kid": "{kid}", "X-Fwlog-Bid": "{bid}",
+                  "X-Fwlog-Team": "{team_id}", "X-Fwlog-Match": "{match_id}",
+                  "X-Fwlog-Instance": "{instance_id}", "X-Fwlog-Half": "{half_no}",
+                  "X-Fwlog-Run": "{run_id}", "X-Fwlog-Seq-From": "{seq_from}",
+                  "X-Fwlog-Seq-To": "{seq_to}", "X-Fwlog-Chain-Before": "{chain_before}",
+                  "X-Fwlog-Anchor": "{anchor}"},
+      "body_raw": "{frames_ndjson}",
+      "response_map": {"accepted": "$.data.accepted"},
+      "idempotency": {"key": "{match}:{team}:{instance}:{half}:{run_id}:{seq_from}:{seq_to}", "where": "header"},
+      "poll": false
+    },
+    "leaderboard": {
+      "purpose": "榜单（评估对手强度）",
+      "method": "GET", "path": "__FILL__", "query": {"page": "{page}", "size": "{size}"},
+      "response_map": {"items": "$.data.list"},
+      "items_map": {"team_id": "teamId", "rating": "rating", "wins": "wins", "losses": "losses"},
+      "pagination": {"mode": "page", "page_param": "page", "size_param": "size", "total_path": "$.data.total", "max_pages": 5},
+      "poll": false
+    },
+    "probe.ping": {
+      "purpose": "连通性与鉴权探活（doctor 用）",
+      "method": "GET", "path": "__FILL__",
+      "response_map": {"ok": "$.data.ok", "server_time": "$.data.serverTime"},
+      "success_when": {"code_path": "$.code", "ok_values": [0, 200, "0", "SUCCESS"], "http_ok": [200]},
+      "note": "★ v1.0 这里用 $.success 而其它端点用 $.data.*，在 {code,data} 风格平台上会得到 ok=null 造成 doctor 假阴性；现统一用 defaults.success_when。",
+      "poll": false
+    }
+  },
+
+  "unknowns": {
+    "$comment": "填写时若发现平台有这里没有的能力，追加到 endpoints 并在本清单登记。",
+    "platform_may_support": [
+      {"capability": "固定随机种子（复现同一局）", "why": "可做配对比较，样本效率翻倍", "probe": "match.create 是否接受 seed 并回显"},
+      {"capability": "选择对手/训练机器人", "why": "A/B 对照必须固定对手", "probe": "opponent.list 是否可用"},
+      {"capability": "剩余上传/对战额度查询", "why": "护栏的 daily 限额应读真实值", "probe": "team.info 是否返回 quota"},
+      {"capability": "取消/重跑对战", "why": "卡死时不用干等", "probe": "match.cancel"},
+      {"capability": "单半场日志下载", "why": "避免整场重复下载", "probe": "logs.list 的 half 参数"},
+      {"capability": "构建日志正文接口", "why": "编译失败时 Agent 需自动修复", "probe": "build.log"},
+      {"capability": "服务端幂等（Idempotency-Key）", "why": "本地 receipt 覆盖不了'请求已发出但响应丢失'", "probe": "上传/开局带同 key 重发是否去重"},
+      {"capability": "Webhook/回调", "why": "当前只有轮询，长超时会浪费预算", "probe": "平台是否提供回调地址配置"},
+      {"capability": "CSRF token（cookie 鉴权模式）", "why": "缺它会全线 403", "probe": "登录响应是否带 csrfToken 字段"}
+    ]
+  }
+}

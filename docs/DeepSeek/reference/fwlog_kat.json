@@ -1,0 +1,149 @@
+{
+  "spec": "fwlog.frame/1",
+  "alg": "hmac-aead-v1",
+  "note": "KAT 固定输入见 constants。任何实现必须逐字节复现 frames 的 h/c/t/x。v1.1 起链为内容绑定，且绑定 run_id。",
+  "constants": {
+    "team_secret_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "match_id": "M-2026-0001",
+    "team_id": "6324",
+    "instance_id": "challenger-node-a",
+    "half_no": 1,
+    "run_id": "r18f2c0a1-9d3b7e42",
+    "build_id": "coregeek-0.1.0+abc1234",
+    "nonce_prefix_hex": "deadbeef",
+    "ts_ms": 1767225600000
+  },
+  "derived": {
+    "context": "fwlog/v1|M-2026-0001|6324|challenger-node-a|1|r18f2c0a1-9d3b7e42",
+    "kid": "64776453598938e6",
+    "bid": "5bc333ba82fe2cab",
+    "k_enc_hex": "513f29179e215ec9b0e32e9d544bf4f30457b1ad005ed02a43dec538cbde6f06",
+    "k_mac_hex": "95d71d0cf1bb5ed62a8202ab8b3501be95df1bb963ebd9c2e541c65edab5933b"
+  },
+  "frames": [
+    {
+      "c": "TYwDvVNcFIeYWx4Yb2ho2CccOop7tpLlU9k73FGwkm7TIUtC06lLZgdla84zeWzk71AXructzYqTL9CY_nk6wiBUBwyAIVpUyRoibRS_vTX1G4aiG8-mGOM3c7RXuRxRM7P2KNBgaZlXLz40F4ObLch650D3ADJzpPU0IXXnSWYjP3oDbVRfpDaNHVZhzFYi0F8",
+      "h": {
+        "alg": "hmac-aead-v1",
+        "chain": "BaYcG6NVVMtAhFF3koCFAg",
+        "ev": "boot",
+        "half": 1,
+        "inst": "challenger-node-a",
+        "kid": "64776453598938e6",
+        "lvl": "info",
+        "magic": "FWL1",
+        "mid": "M-2026-0001",
+        "n": "3q2-7wAAAAAAAAAB",
+        "round": 1,
+        "run": "r18f2c0a1-9d3b7e42",
+        "seq": 1,
+        "tid": "6324",
+        "ts": 1767225600000,
+        "v": 1
+      },
+      "t": "HeJgnWdXScjNrFcOcVdHAA",
+      "x": "YAKyZHPiyuJYAmNbLAVbww"
+    },
+    {
+      "c": "-o5BM_hw7SEMr76QU3-Z8qtkP7j_D-IEAGmt75E2IbcLouirn0hrt6YZ-YTdt_ZwIvOvtX_n0EsuogxnLaNFfuecdDMm2hjtGKxOunMBhEObJ5gZDnlia4KfxcD0Uo1tkIezFuvOTOHqI-xk6OefGdCnFNlkIsq3R9QPPrn8verdSnaof9bHL85m-XlhtSvt8-iPajQR2XMM0fAVhGSMu_S7odIDdCc",
+      "h": {
+        "alg": "hmac-aead-v1",
+        "chain": "YAKyZHPiyuJYAmNbLAVbww",
+        "ev": "round",
+        "half": 1,
+        "inst": "challenger-node-a",
+        "kid": "64776453598938e6",
+        "lvl": "info",
+        "magic": "FWL1",
+        "mid": "M-2026-0001",
+        "n": "3q2-7wAAAAAAAAAC",
+        "round": 85,
+        "run": "r18f2c0a1-9d3b7e42",
+        "seq": 2,
+        "tid": "6324",
+        "ts": 1767225600000,
+        "v": 1
+      },
+      "t": "4WQLpuo7TA8W7qeZIrrklA",
+      "x": "UyB_-AAV0vW0bpt9phdHdQ"
+    },
+    {
+      "c": "HhbHek1_Pv_gH7pLkMpghPZNA3QfX4SBhYbjKH6rGHDnWbE0o2i-Y1uvE3xxqALf8Q6eivvYqb67updreFO5E4M3GWV1Z_O5zcplQtt89-W2Vqm8pB2fZ1GcsMvu3hZ0Mv_Hcn9itkSY20jY8r_nebrv2NOjtAWFSdJDx8FMkCcyaZh1PMrieD8_SnypG1KzFzdpsjDXIZUStco3NcjPdANcgayQmYwKByAt55OzJFdH16_LA6M_KbbS75xdUOBCLEspn8zNFBtuJsOus46Yck09HBjNhkvoOAkshD6ZCB2APqlObJMNkvBiR_xZuIGR4I9p",
+      "h": {
+        "alg": "hmac-aead-v1",
+        "chain": "UyB_-AAV0vW0bpt9phdHdQ",
+        "ev": "decision",
+        "half": 1,
+        "inst": "challenger-node-a",
+        "kid": "64776453598938e6",
+        "lvl": "info",
+        "magic": "FWL1",
+        "mid": "M-2026-0001",
+        "n": "3q2-7wAAAAAAAAAD",
+        "round": 85,
+        "run": "r18f2c0a1-9d3b7e42",
+        "seq": 3,
+        "tid": "6324",
+        "ts": 1767225600000,
+        "v": 1
+      },
+      "t": "xL_kJERtmBTw1tI3uXAtOg",
+      "x": "V93iEIDe7uU3JksnNKq8eQ"
+    },
+    {
+      "c": "bqEr9NlW2HaGSbhSVdmB8EmXWiZJe44x109enkaowJSWgAqJxms-6ynofdgMbkeXYFckIOx1C1xajndMsl3sD6X_q7uaCUJrObicJgYTG1_mPC6QkW0dv-Y3WBhmSOUs-BVGfC_MwN2O0EIQYjxztYr7uqI4yD0osczNqN4uh0kw1EFw1QCuZVNE30uJ7l6KcQ",
+      "h": {
+        "alg": "hmac-aead-v1",
+        "chain": "V93iEIDe7uU3JksnNKq8eQ",
+        "ev": "outcome",
+        "half": 1,
+        "inst": "challenger-node-a",
+        "kid": "64776453598938e6",
+        "lvl": "info",
+        "magic": "FWL1",
+        "mid": "M-2026-0001",
+        "n": "3q2-7wAAAAAAAAAE",
+        "round": 86,
+        "run": "r18f2c0a1-9d3b7e42",
+        "seq": 4,
+        "tid": "6324",
+        "ts": 1767225600000,
+        "v": 1
+      },
+      "t": "enV--5SP9ethgGfM7QzwxQ",
+      "x": "ESq-5_lp1plId9j-nozJFQ"
+    },
+    {
+      "c": "JC9w_m7m-kD5RKkNb0w4eU8Z_jkO4wGIgOOEQrs-jjcXtF1qBZ9Kkf0J6asEJLWrad2Cpmz4Kfgpgq1QZH6wx-OWVNzENdOqjyE6igYFG8KzyfhwIoU6ryeiirvKRHV7ZZ6b_DJQJrwICTxVDcbkOenk-Y8-I0AciKf12l8",
+      "h": {
+        "alg": "hmac-aead-v1",
+        "chain": "ESq-5_lp1plId9j-nozJFQ",
+        "ev": "guard",
+        "half": 1,
+        "inst": "challenger-node-a",
+        "kid": "64776453598938e6",
+        "lvl": "info",
+        "magic": "FWL1",
+        "mid": "M-2026-0001",
+        "n": "3q2-7wAAAAAAAAAF",
+        "round": 86,
+        "run": "r18f2c0a1-9d3b7e42",
+        "seq": 5,
+        "tid": "6324",
+        "ts": 1767225600000,
+        "v": 1
+      },
+      "t": "FFqcIYV350nWg8aiHFsYXQ",
+      "x": "lOPMkSXaDjG0puzXDcc-3A"
+    }
+  ],
+  "anchor": {
+    "schema": "fwlog.anchor/1",
+    "run_id": "r18f2c0a1-9d3b7e42",
+    "kid": "64776453598938e6",
+    "alg": "hmac-aead-v1",
+    "count": 5,
+    "first_chain": "YAKyZHPiyuJYAmNbLAVbww",
+    "last_chain": "lOPMkSXaDjG0puzXDcc-3A"
+  }
+}

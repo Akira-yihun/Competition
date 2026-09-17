@@ -1,0 +1,169 @@
+{
+  "$comment": "loopctl 的唯一配置文件。所有 '__FILL__' 必须由用户手工替换；`loopctl doctor --json` 会列出未填项、缺失文件与探活结果。",
+  "config_version": 2,
+
+  "repo": {
+    "$comment": "路径相对本文件所在仓库根（= Demo/CoreGeek）。cwd 不影响解析。",
+    "root": ".",
+    "source_globs": ["src/**/*.py", "main3.py"],
+    "protected_paths": ["loop/", "docs/", "secrets/", ".git/"],
+    "bootstrap_phase": true,
+    "$comment_bootstrap": "true = 允许 Agent 创建 loop/**、tests/**、run.sh（否则 guard 会引用不存在的脚本导致首轮死锁）。Phase 1 完成后改 false。",
+    "default_branch": "main",
+    "iteration_branch_prefix": "loop/iter-",
+    "best_tag": "loop/best",
+    "rollback_tag_prefix": "loop/rollback/"
+  },
+
+  "guard": {
+    "$comment": "本地护栏。check 脚本由 Phase 0 实现；未实现的 check 会被 doctor 标 missing 而不是静默跳过。",
+    "max_diff_lines": 400,
+    "checks": [
+      {"name": "compile", "cmd": "python3 -m compileall -q src main3.py", "required": true, "timeout_s": 60},
+      {"name": "unit", "cmd": "python3 -m pytest -q tests", "required": true, "timeout_s": 180},
+      {"name": "protocol_schema", "cmd": "python3 loop/lib/guard.py check-protocol", "required": true, "timeout_s": 60},
+      {"name": "smoke_replay", "cmd": "python3 loop/lib/guard.py replay ../../docs/request.txt", "required": true, "timeout_s": 60},
+      {"name": "scan_secrets", "cmd": "python3 loop/lib/guard.py scan-secrets", "required": true, "timeout_s": 30},
+      {"name": "run_sh", "cmd": "python3 loop/lib/guard.py check-runsh", "required": true, "timeout_s": 10},
+      {"name": "gitignore", "cmd": "python3 loop/lib/guard.py check-gitignore", "required": true, "timeout_s": 10}
+    ],
+    "$comment_pytest": "若环境无 pytest，把 unit 的 cmd 换成 `python3 -m unittest discover -s tests`（Phase 0 必须二选一落地，tests/ 目录必须真实存在）。",
+    "git_allowlist": ["add", "commit", "tag", "checkout", "branch", "diff", "log", "status", "rev-parse"],
+    "$comment_git": "白名单式：其它 git 子命令一律拒绝（v1.0 的字符串黑名单挡不住 amend/reset --hard/force-with-lease）。",
+    "required_gitignore": ["secrets/", "src/agent/_fwsecret.py", "runs/", "loop/state/", "logs/", "*.fwl.jsonl"]
+  },
+
+  "package": {
+    "$comment": "打包：按 include 白名单构造临时目录后再打 tar（不要 tar 整树），并在打包后扫描产物。",
+    "artifact_name": "coregeek-{version}.tar.gz",
+    "include": ["main3.py", "run.sh", "src/**", "pyproject.toml"],
+    "exclude": ["**/__pycache__/**", "**/*.pyc", ".git/**", "docs/**", "loop/**", "secrets/**",
+                "runs/**", "tests/**", "**/.DS_Store"],
+    "build_from_whitelist": true,
+    "require_run_sh": true,
+    "run_sh_template": "#!/usr/bin/env bash\nset -euo pipefail\nexec python3 \"$(dirname \"$0\")/main3.py\" \"${1:?usage: run.sh <port>}\"\n",
+    "run_sh_creation_allowed_in_bootstrap": true,
+    "$comment_runsh": "run.sh 当前不存在。bootstrap 阶段允许 Agent 创建它（否则 require_run_sh 与'只改 src/**'互锁）。",
+    "post_build_scan": {
+      "$comment": "★ 打包后断言：命中即 fail build（v1.0 实测密钥可从 __pycache__/*.pyc 里 grep 出来）",
+      "forbid_patterns": ["_fwsecret", "_FWLOG_", "SECRET\\s*=\\s*bytes\\.fromhex"],
+      "forbid_regex": ["[0-9a-fA-F]{64}"],
+      "forbid_paths": ["**/__pycache__/**", "**/*.pyc"]
+    },
+    "log_secret": {
+      "master_key_file": "secrets/fwlog/master.json",
+      "inject_path": "src/agent/_fwsecret.py",
+      "rotate_per_build": true,
+      "purge_pycache_before_inject": true,
+      "delete_after_build": true,
+      "$comment": "密钥投递为**混淆级**：从 tar 里取密钥成本接近零。机密性前提见 03 文档 §2.1（已登记为待确认项）。"
+    }
+  },
+
+  "platform": {
+    "$comment": "★ 本节是唯一需要按平台实际情况填充的部分",
+    "base_url": "__FILL__",
+    "verify_tls": true,
+    "timeout_s": 30,
+    "user_agent": "coregeek-loopctl/1.1",
+    "auth": {
+      "mode": "__FILL__",
+      "$comment": "mode ∈ none | bearer | cookie | basic | signed",
+      "login_endpoint": "auth.login",
+      "refresh_endpoint": "auth.refresh",
+      "token_env": "FW_PLATFORM_TOKEN",
+      "username_env": "FW_PLATFORM_USER",
+      "password_env": "FW_PLATFORM_PASS",
+      "extra_headers": {},
+      "csrf": {"enabled": false, "token_path": "$.data.csrfToken", "header": "X-CSRF-Token"},
+      "cookie_jar": "secrets/cookies.txt"
+    },
+    "identity": {"team_id": "__FILL__", "team_name": "__FILL__"},
+    "endpoints_source": "docs/DeepSeek/templates/endpoints.reserved.json",
+    "$comment_endpoints": "endpoints_source 指向骨架文件；endpoints 内联时优先级更高。doctor 会检查两者至少有一个可用，且没有任何 '__FILL__' 残留。",
+    "endpoints": {},
+    "poll": {
+      "build_s": 10, "match_s": 15, "backoff_max_s": 120, "jitter": true,
+      "build_timeout_s": 900, "build_stuck_s": 180,
+      "match_timeout_s": 2400, "match_stuck_s": 600,
+      "reconcile_window_s": 1800,
+      "$comment": "build_stuck_s(180) 与 match_stuck_s(600) 分开配置：v1.0 只有一个 stuck_s=600，与 build 的 180s 判定冲突。"
+    },
+    "limits": {
+      "max_uploads_per_day": 20, "max_matches_per_iter": 6,
+      "max_iters_per_day": 30, "max_wall_clock_h": 12,
+      "prefer_server_quota": true
+    },
+    "match_defaults": {
+      "count": 3,
+      "opponent_id": null,
+      "$comment_opponent": "null = 不指定（平台自动匹配）。建议填一个固定对手做 A/B。绝不要留 '__FILL__'，否则会把它当成真实对手 id 发出去。",
+      "mode": null,
+      "seed": null,
+      "$comment_seed": "null = 不带 seed 字段（不是发 \"seed\": null）。平台支持固定 seed 时填一个整数。",
+      "side_swap": true
+    },
+    "log_sink": {
+      "mode": "file",
+      "$comment": "mode ∈ file | http。http 时用 endpoints.logs.upload；两侧必须都能工作，见 02 文档 §4.4。",
+      "local_dir": "logs",
+      "http_endpoint": "logs.upload",
+      "gzip": false,
+      "$comment_gzip": "默认 false：gzip 放在决策路径上会引入额外开销（实测 gzip -6 处理 3.16MB 约 0.08s），压缩应在收尾/后台上做。",
+      "max_batch_frames": 4096,
+      "chain_before_header": true
+    }
+  },
+
+  "acceptance": {
+    "$comment": "判定规则。★ 关键：比较的是'候选 − 基线'的 Δ，不是绝对水平；且必须报告 MDE。",
+    "primary_metric_source": "hypothesis_card",
+    "$comment_primary": "hypothesis_card = 用假设卡里声明的主指标；fallback 用 primary_metric。",
+    "primary_metric": "score_total",
+    "$comment_metric_choice": "小样本下不要用 win_rate 做主判据（MDE 高达 40~58pp）。推荐用低方差的连续过程指标（idle_tower_rounds 等）证明'机制生效'，终局指标留给大样本。",
+    "secondary_metrics": ["win_rate", "score_1", "score_2", "score_3", "anomalies_local",
+                          "idle_tower_rounds", "overkill_ratio", "task_avg_rounds"],
+    "direction": "higher_is_better",
+    "per_metric_direction": {"idle_tower_rounds": "lower_is_better", "overkill_ratio": "lower_is_better",
+                             "task_avg_rounds": "lower_is_better", "anomalies_local": "lower_is_better"},
+    "sample_tiers": {"smoke": 1, "standard": 3, "confirm": 6},
+    "smoke_excluded_from_decision": true,
+    "stat": {
+      "alpha": 0.1,
+      "method": "auto",
+      "unit": "match",
+      "$comment_unit": "★ 独立单元是'场'而不是'半场'（同一场上下半场换边，互为镜像）。",
+      "bootstrap_n": 10000,
+      "use_paired_when_seeded": true,
+      "report_mde": true,
+      "sequential_alpha_shrink": 0.85,
+      "$comment_seq": "每次 need_more 追加样本后 α 乘以该系数，控制多重比较下的假 accept。"
+    },
+    "hard_gates": {
+      "max_local_anomalies": 0,
+      "max_p99_decision_ms": 3000,
+      "require_guard_pass": true,
+      "require_log_verify_ok": true,
+      "$comment_anomaly": "★ 只认**本地自计**的异常数；errors[] 的口径未定义（01 文档 Q11），不能作为门禁输入。"
+    },
+    "noise_floor_file": "loop/state/noise.json",
+    "min_effect": {"score_total": 0.05, "score_1": 0.08, "score_2": 0.08,
+                   "idle_tower_rounds": 0.25, "win_rate": 0.15},
+    "$comment_min_effect": "比例阈值。v1.0 的 score_total:0.03 对 1000+ 分的量级等于 0 门槛；win_rate:0.15 是承认小样本测不出小效应。"
+  },
+
+  "guardrails": {
+    "require_approval": ["upload"],
+    "$comment_approval": "默认只在上传前要人确认；全自动就改成 []。审批绑定到 artifact_sha256 ⇒ 改码换包后自动失效。",
+    "max_consecutive_failures_per_hypothesis": 3,
+    "max_build_retries": 3,
+    "auto_revert_on_hard_gate": true,
+    "notify": {"mode": "none", "webhook_url": null}
+  },
+
+  "adapters": {
+    "default": "http",
+    "fixture_dir": "loop/fixtures",
+    "mock": {}
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "match_id": "M-2026-DEMO-001",
+  "team_id": "6324",
+  "instance_id": "challenger-node-a",
+  "half_no": 1,
+  "run_id": "rdemo0001-00000000",
+  "build_id": "coregeek-demo+0000000",
+  "alg": "hmac-aead-v1",
+  "kid": "e3a819177678f61c",
+  "bid": "e1ab2faee80475f9",
+  "context": "fwlog/v1|M-2026-DEMO-001|6324|challenger-node-a|1|rdemo0001-00000000",
+  "frames": 14,
+  "demo_secret_hex": "fb0d6372402d9ce96a2ac59c24f11e9332311d36f1e6b6673baf63734b55cef1",
+  "secret_is_demo": true,
+  "warning": "demo_secret_hex 由固定公开种子 sha256('fwlog-demo/1') 派生，**仅用于演示与自测**；真实队伍密钥绝不可入库，也不得写进日志。"
+}

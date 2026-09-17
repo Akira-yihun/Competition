@@ -1,0 +1,8 @@
+解开样例日志（相对 docs/DeepSeek/ 运行）：
+  python3 reference/fwlog_crypto_ref.py --verify samples/sample-match.fwl.jsonl \
+      --secret-file samples/sample-match.meta.json \
+      --anchor samples/sample-match.anchor.json
+  python3 reference/fwlog_crypto_ref.py --dump samples/sample-match.fwl.jsonl \
+      --secret-file samples/sample-match.meta.json
+说明：--secret-file 接受两种格式——本样例的 meta.json（读 demo_secret_hex 字段）
+      或 secrets 目录下的 {"secret_hex": "..."} 文件。
