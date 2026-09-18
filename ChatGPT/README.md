@@ -1,4 +1,4 @@
-# CoreGeek v0.4 调测版
+# CoreGeek v0.5 调测版
 
 按新设计完成参赛服务、策略模块、任务状态和本地评测的重构。`main3.py` 保持原样，正式启动脚本由平台提供；仓库 `run.sh` 仅用于本地测试，不进入提交包。
 
@@ -28,7 +28,7 @@ bash run.sh 8080
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 python3 -m lab.evaluate --seeds 1,2,3 --rounds 1300 --output artifacts/v02-simulation
 python3 -m lab.replay --input artifacts/v02-simulation/seed-1-normal.ndjson --output artifacts/v02-replay.ndjson
-python3 tools/package.py --output artifacts/coregeek-v0.4.tar.gz
+python3 tools/package.py --output artifacts/coregeek-v0.5.tar.gz
 ```
 
 HTTP测试需要本机端口权限。源码服务经本地shell启动；解压包直接通过原 `main3.py` 启动，验证平台入口兼容性。测试包每次重新构建，避免误测旧包。
@@ -49,9 +49,9 @@ python3 -m loop.cli status --iteration artifacts/my-iteration
 
 ## 提交包与实现边界
 
-`artifacts/coregeek-v0.4.tar.gz` 包含未修改的 `main3.py`、`pyproject.toml`、递归 `src/agent/**/*.py` 和MANIFEST。**不含run.sh**、实验室、Loop、对手、测试、日志或密钥。以平台提供的脚本调用入口；本地可解压后运行 `python3 main3.py PORT`。
+`artifacts/coregeek-v0.5.tar.gz` 包含未修改的 `main3.py`、`pyproject.toml`、递归 `src/agent/**/*.py` 和MANIFEST。**不含run.sh**、实验室、Loop、对手、测试、日志或密钥。以平台提供的脚本调用入口；本地可解压后运行 `python3 main3.py PORT`。
 
-当前按调测要求默认向 stdout 输出明文 NDJSON：新闻、任务正文、模型返回、执行结果、实际提交答案、解析原因、动作校验丢弃和夜间操纵站位。异步队列满时丢弃日志并计数；大字段截断长度见 `truncatedCharacters`。公钥遥测、可验证SOP自动复用、统一角色/机器人移动裁判、宝藏与官方平台适配尚未完成。
+当前默认按回合分段向 stdout 输出明文日志：第一行 `ROUND n`，第二行 `req {原始字段 JSON}`，第三行 `rsp {原始字段 JSON}`，随后分行输出官方新闻、民间传闻、任务要求、LLM 结果和 prompt、命令结果和命令；原始 JSON 保留完整字段与值（空白规范化为单行），换行转义以维持每项一行。末行 `diagnostics` 保留结构化诊断；设置 `CORE_GEEK_LOG_FORMAT=ndjson` 可恢复单事件 JSON。包括：新闻、任务正文、模型返回、执行结果、实际提交答案、解析原因、动作校验丢弃和夜间操纵站位。异步队列满时丢弃日志并计数；req/rsp 不截断；diagnostics 大字段截断长度见 `truncatedCharacters`。公钥遥测、可验证SOP自动复用、统一角色/机器人移动裁判、宝藏与官方平台适配尚未完成。
 
 ```bash
 # 指定明文日志文件；入口不变
@@ -62,7 +62,7 @@ CORE_GEEK_DEBUG_LOG=off bash run.sh 8080
 python3 tools/analyze_debug.py artifacts/debug.ndjson
 ```
 
-当前策略：第一天两工人协作建三座火箭炮和 U 形围墙；后续防御工人负责石材、修墙、采购升级及夜间操纵，经济工人负责采矿卖矿，开拓者昼夜做任务或按可靠传闻寻宝。三炮集中在基地背侧，同一个固定站位能操纵全部三座。升级顺序为火箭炮、基地、围墙。
+当前策略：先建三座火箭炮，前线炮完成首次升级后备一张基地券，后续继续按前线方向升级武器；基地券由防守工人保留到低血量或预计两回合内致命时使用。矿点按价格、实际路线与售卖距离选择，持续采集至矿点消失；满包卖矿后可返回原矿点。日内第 61 回合起撤离中路，夜间经济与任务活动限于左右外侧三分之一区域，并回避机器人周围四格。三炮仍集中在基地背侧，同一个固定站位能操纵全部三座。
 
 新闻与历日传闻合并推理，非任务模型调用每天最多三次。矿价预测指导选矿及持有到期再出售；宝藏计划要求坐标、精确物品与开放窗口齐备。自进化任务先理解，再解题/沙盒验证，其模型调用不占新闻额度。完整提示词与调度规则见 [v0.4 设计](docs/design/05-v04三人分工与模型调度.md)。
 
@@ -74,3 +74,7 @@ python3 -m lab.intelligence_scenario --output artifacts/v04-news-new-run
 参见 [总体设计](docs/design/01-总体架构与实现设计.md)、[实施分工](docs/design/02-实施阶段与模块分工.md)、[本轮实现报告](docs/design/03-v02实现与验证.md)。
 
 本次调测变更及验证见 [防御与任务日志修订](docs/design/04-防御与任务日志修订.md)。
+
+当前工作区为 `2026 HW Comp/`，Git 根为 `CoreGeek/`，本工程为 `CoreGeek/ChatGPT/`，官方规则为工作区 `docs/`。本页命令均在本工程目录运行。后续每次优化都在 `docs/design/` 新增需求、方案、验证和局限记录，不覆盖历史结论。
+
+v0.5 策略及验证以 [目录迁移与策略优化归档](docs/design/06-v05目录迁移与策略优化.md) 为准。

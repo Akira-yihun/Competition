@@ -2,7 +2,7 @@
   "schema_version": "1.0",
   "mode": "design_only",
   "platform_writes_enabled": false,
-  "project_root": "../../..",
+  "project_root": "../..",
   "archive_root": "..",
   "endpoints_file": "endpoints.reserved.json",
   "baseline": {

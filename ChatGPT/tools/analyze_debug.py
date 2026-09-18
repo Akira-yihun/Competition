@@ -9,7 +9,7 @@ from pathlib import Path
 def summarize(path):
     counts=Counter();reasons=Counter();errors=Counter();submitted=[];night=Counter()
     for line in path.open(encoding='utf-8'):
-        try:event=json.loads(line)
+        try:event=json.loads(line.removeprefix('diagnostics '))
         except ValueError:continue  # Startup banner may share stdout.
         if not isinstance(event,dict) or event.get('schema')!='coregeek-debug/1':continue
         counts['events']+=1

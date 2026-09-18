@@ -1,5 +1,6 @@
 """Useful task/news evidence, with explicit size truncation."""
 import json
+from copy import deepcopy
 from .writer import emit
 
 
@@ -11,7 +12,7 @@ def _record(payload,response,state,status='decision',error=None):
         if len(text)>limit:truncations[name]=len(text)-limit
         return text[:limit]
     team=payload.get('teamOur') or {}
-    event={'event':status,'round':payload.get('roundNo'),'team':team.get('teamId'),'side':team.get('type'),
+    event={'req':deepcopy(payload),'rsp':deepcopy(response),'event':status,'round':payload.get('roundNo'),'team':team.get('teamId'),'side':team.get('type'),
            'gold':team.get('goldNum'),'score':team.get('totalScore'),
            'worldNews':bounded('worldNews',payload.get('worldNews',{})),
            'phaseTask':bounded('phaseTask',payload.get('phaseTask','')),

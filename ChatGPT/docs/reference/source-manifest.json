@@ -2,47 +2,54 @@
   "schema_version": 1,
   "review_date": "2026-09-17",
   "baseline_commit": "e8dc40893232b0a82295c47c1a5ad018b44be7b4",
-  "source_root": "workspace",
+  "source_root": "2026 HW Comp",
   "files": [
     {
-      "path": "Competition/docs/任务书.md",
+      "path": "docs/任务书.md",
       "sha256": "06bd14a6325b1a78ae29fa49bd5b25768755f9e2b8343ef1145c54c8bff3d456"
     },
     {
-      "path": "Competition/docs/接口文档.md",
+      "path": "docs/接口文档.md",
       "sha256": "931a65d09f881b30644225ca8d6b1bfbc7b2bea7b4f6ce50d1f70cf858cb144d"
     },
     {
-      "path": "Competition/docs/request.txt",
+      "path": "docs/request.txt",
       "sha256": "5fc36943ce3d7bbca678b6342cd4a6c092d91ae8032e3107e8e840ba8cc88d82"
     },
     {
-      "path": "Competition/docs/response.txt",
+      "path": "docs/response.txt",
       "sha256": "5daf8278d7f097417b50082165a28dc4ce03163323730dc160ee4f7a534ed8d0"
     },
     {
-      "path": "Competition/Demo/CoreGeek/main3.py",
-      "sha256": "26867a5a5f9d0de472d3b20f56419dd921a53c4606f707efeb30ca9d31fda604"
+      "path": "CoreGeek/ChatGPT/main3.py",
+      "sha256": "26867a5a5f9d0de472d3b20f56419dd921a53c4606f707efeb30ca9d31fda604",
+      "git_path": "main3.py"
     },
     {
-      "path": "Competition/Demo/CoreGeek/pyproject.toml",
-      "sha256": "04f53cf80d452ec7ef3eee4484e8f951de789bd99533229e8823fd1173fe0718"
+      "path": "CoreGeek/ChatGPT/pyproject.toml",
+      "sha256": "04f53cf80d452ec7ef3eee4484e8f951de789bd99533229e8823fd1173fe0718",
+      "git_path": "pyproject.toml"
     },
     {
-      "path": "Competition/Demo/CoreGeek/src/agent/brain.py",
-      "sha256": "70e95bdf861be6b1c0307482cb1499fa4c337bbb0f83c8e974502990d42c8090"
+      "path": "CoreGeek/ChatGPT/src/agent/brain.py",
+      "sha256": "70e95bdf861be6b1c0307482cb1499fa4c337bbb0f83c8e974502990d42c8090",
+      "git_path": "src/agent/brain.py"
     },
     {
-      "path": "Competition/Demo/CoreGeek/src/agent/protocol.py",
-      "sha256": "99526ad676c13c81b9bc23d8b3e37cfe78cb0331a0be07321013bc31d6151dd2"
+      "path": "CoreGeek/ChatGPT/src/agent/protocol.py",
+      "sha256": "99526ad676c13c81b9bc23d8b3e37cfe78cb0331a0be07321013bc31d6151dd2",
+      "git_path": "src/agent/protocol.py"
     },
     {
-      "path": "Competition/Demo/CoreGeek/src/agent/grid.py",
-      "sha256": "158b7708377172f2cfcc1b0bbde4e711962ab1e1bdbff260a562b70cc91adcb6"
+      "path": "CoreGeek/ChatGPT/src/agent/grid.py",
+      "sha256": "158b7708377172f2cfcc1b0bbde4e711962ab1e1bdbff260a562b70cc91adcb6",
+      "git_path": "src/agent/grid.py"
     },
     {
-      "path": "Competition/Demo/CoreGeek/src/agent/server.py",
-      "sha256": "da2ecc94efd6d433407b51abc79433849c31563961812299f2b66c32506897bf"
+      "path": "CoreGeek/ChatGPT/src/agent/server.py",
+      "sha256": "da2ecc94efd6d433407b51abc79433849c31563961812299f2b66c32506897bf",
+      "git_path": "src/agent/server.py"
     }
-  ]
+  ],
+  "note": "规则文件按新目录校验；历史源码仍按 baseline_commit 中 git_path 校验，保留原始摘要。"
 }

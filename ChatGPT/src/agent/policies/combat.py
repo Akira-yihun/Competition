@@ -1,4 +1,5 @@
 from ..model import *
+from .construction import facing
 from ..protocol import move_command, build_command, attack_command, sell_command
 from ..navigation import route, STEPS
 from ..world import _neighbours, _footprint_distance, _walk, _cells_at_distance
@@ -14,23 +15,34 @@ def _attack_targets(turn, tower, remaining=None):
     reachable = [r for r in ordered if 0<distance(tower.pos,r.pos)<=tower.range_of_attack()]
     level = min(3,max(1,tower.level))
     if tower.kind == 'rocket':
-        candidates = {p for r in robots for p in (r.pos,)+_neighbours(r.pos)
-                      if 0<=p.x<turn.width and 0<=p.y<turn.height and distance(p,tower.pos)<=tower.range_of_attack()}
-        if not candidates:
-            return []
         targets=[]
         local=dict(hp)
         for _ in range(level):
+            live=[r for r in ordered if local.get(r.robot_id,r.health)>0]
+            # Always splash the nearest reachable threat. Never chase a distant swarm.
+            anchor=next((r for r in live if distance(tower.pos,r.pos)<=tower.range_of_attack()+1),None)
+            if anchor is None:break
+            candidates={p for p in (anchor.pos,)+_neighbours(anchor.pos)
+                        if 0<=p.x<turn.width and 0<=p.y<turn.height
+                        and 0<distance(p,tower.pos)<=tower.range_of_attack()}
+            if not candidates:break
             def value(p):
-                return sum(min(local.get(r.robot_id,r.health),20 if p==r.pos else 10)
-                           * (2 if _footprint_distance(r.pos,footprint)<=3 else 1)
-                           for r in robots if distance(p,r.pos)<=1)
-            target=max(candidates,key=lambda p:(value(p),-_footprint_distance(p,footprint),-p.x,-p.y))
+                hit=[r for r in live if distance(p,r.pos)<=1]
+                rear=(p.x-anchor.pos.x)*facing(turn)>0
+                crowded=len(hit)>=3
+                strong=any(r.kind!='smallRobot' and (r.pos.x-anchor.pos.x)*facing(turn)>0 for r in hit)
+                urgent=_footprint_distance(anchor.pos,footprint)<=3
+                damage=sum(min(local.get(r.robot_id,r.health),20 if p==r.pos else 10) for r in hit)
+                # A one-cell rear shift hits ranks two/three and keeps rank one in splash.
+                return (int(urgent and p==anchor.pos),damage+ (12 if rear and (crowded or strong) else 0),
+                        -_footprint_distance(p,footprint),-p.x,-p.y)
+            target=max(candidates,key=value)
             targets.append(target)
-            for r in robots:
+            for r in live:
                 if distance(target,r.pos)<=1:
                     local[r.robot_id]=max(0,local.get(r.robot_id,r.health)-(20 if target==r.pos else 10))
-        return targets
+        # Protocol requires exactly one aim point per weapon level.
+        return targets+[targets[-1]]*(level-len(targets)) if targets else []
     if not reachable:
         return []
     if tower.kind == 'railgun':

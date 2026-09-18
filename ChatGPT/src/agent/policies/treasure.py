@@ -2,7 +2,7 @@
 from collections import Counter
 from ..model import Pos,distance
 from ..world import _walk
-from ..navigation import route
+from ..navigation import route, night_caution, safe_cell
 from ..world import _neighbours
 from ..intelligence.news import memory
 
@@ -11,7 +11,9 @@ def plan(turn,pioneer,state,reserved,commands):
     mem=memory(state);t=mem.get('treasure')
     if not t or mem.get('treasure_closed') or turn.phase_task or pioneer is None:return False
     if turn.round_no>t['endRound']:mem['treasure']=None;return False
-    target=Pos.load(t['position']);need=Counter(t['items'])-Counter(pioneer.backpack)
+    target=Pos.load(t['position'])
+    if night_caution(turn) and not safe_cell(turn,target):return False
+    need=Counter(t['items'])-Counter(pioneer.backpack)
     if need:
         shop=next((p for p,k in turn.zones.items() if k=='weaponShop'),None)
         prices={i['name']:i['price'] for i in turn.raw.get('weaponShopList',[]) if isinstance(i,dict) and 'name' in i and 'price' in i}

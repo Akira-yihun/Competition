@@ -115,13 +115,15 @@ class IntelligenceTests(unittest.TestCase):
                 next(u for u in p['teamOur']['roles'] if u['id']==rid)['cooldown']=3
         self.assertEqual(len(shots),3);self.assertEqual(len(set(shots)),3)
 
-    def test_clear_map_completes_walls_first_day(self):
+    def test_clear_map_builds_defenses_after_mine_depletion(self):
         m=Match();m.zones=[z for z in m.zones if z['neutralType'] not in ('stone','iron','copper')];m.mines={}
         for p in [(2,20),(10,28)]:
-            m.zones.append({'pos':pos(p),'neutralType':'stone'});m.mines[p]=100
+            m.zones.append({'pos':pos(p),'neutralType':'stone'});m.mines[p]=10  # Official mines deplete after ten collections.
         session=Session()
         for _ in range(70):m.begin();m.step([session.decide(m.observation(0)),empty_response()])
-        self.assertEqual(m.metrics[0]['walls_built'],16);self.assertEqual(m.metrics[0]['towers_built'],3)
+        self.assertGreater(m.metrics[0]['walls_built'],0);self.assertEqual(m.metrics[0]['towers_built'],3)
+        self.assertTrue(any(p not in m.mines for p in ((2,20),(10,28))))
+        self.assertFalse(m.teams[0]['errors'])
 
     def test_purchase_priority_rocket_then_station_then_wall(self):
         m=Match();p=m.observation(0);p['roundNo']=131;p['teamOur']['goldNum']=500

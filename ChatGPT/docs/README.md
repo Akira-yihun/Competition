@@ -1,6 +1,6 @@
 # CoreGeek 策略与迭代工程交接包
 
-本目录给另一个开发 Agent CLI 提供《未来战争》策略分析、可恢复开发闭环计划和共享日志保密设计。归档日期：2026-09-17。用户给出的 `/Demo/CoreGeek/docs/ChatGPT/` 按现有项目结构解析为本目录，即 `Competition/Demo/CoreGeek/docs/ChatGPT/`。
+本目录位于 `CoreGeek/ChatGPT/docs/`。01—04 与 REVIEW 保留 2026-09-17 的历史设计结论；最新实现、验证和目录定义见 [v0.5 优化归档](design/06-v05目录迁移与策略优化.md) 与 [工程 README](../README.md)。工作区根是 `2026 HW Comp/`，Git 根是 `CoreGeek/`，运行命令的工程根是 `CoreGeek/ChatGPT/`。
 
 ## 阅读入口
 
@@ -15,7 +15,7 @@
 | [REVIEW](REVIEW.md) | 多 Agent 分析、交叉检查与本地验证记录 |
 | [source-manifest.json](reference/source-manifest.json) | 原始任务书、接口、样例及源码的 SHA-256 快照 |
 
-事实依据为 [任务书](../../../../docs/任务书.md)、[接口文档](../../../../docs/接口文档.md) 及当前 `src/agent/` 源码；其他模型的既有分析未作为权威依据。原始文档版本均为 v1.0（2026-09-09）。图片未独立读取，本文规则判断基于文档文字、表格及 ASCII 地图，不依赖图片里的额外信息。
+事实依据为 [任务书](../../../docs/任务书.md)、[接口文档](../../../docs/接口文档.md) 及当前 `src/agent/` 源码；其他模型的既有分析未作为权威依据。原始文档版本均为 v1.0（2026-09-09）。图片未独立读取，本文规则判断基于文档文字、表格及 ASCII 地图，不依赖图片里的额外信息。
 
 当前 Git 基线为 `e8dc40893232b0a82295c47c1a5ad018b44be7b4`。交付前工作树已有 `.gitignore` 修改和未跟踪 `docs/`，本次保留这些内容，所有新增归档均在本目录。
 
@@ -30,7 +30,7 @@
 文档自检（在 CoreGeek 根执行）：
 
 ```bash
-python3 docs/ChatGPT/reference/check_docs.py
+python3 docs/reference/check_docs.py
 ```
 
 此命令只检查文件、JSON语法、本地文档链接和来源快照；不代表游戏策略、平台接口或加密实现已通过实测。

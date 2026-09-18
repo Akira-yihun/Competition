@@ -5,6 +5,7 @@ from time import monotonic
 from .protocol import decode, empty_response
 from .model import distance
 from .world import _walk
+from .navigation import evacuate, night_caution, safe_cell
 from .policies import defense, economy, treasure
 from .policies.roles import assign
 from .policies.construction import operator_hub
@@ -27,6 +28,7 @@ def compute(payload, state=None, deadline=None):
     assign(turn,snapshot)
     consumed=news.ingest(turn,snapshot)
     economy.healing(turn,commands)
+    defense.emergency_upgrade(turn,snapshot,reserved,commands)
     # General-news feedback cannot satisfy a task call. A task waits for the
     # single news channel to drain, then all subsequent calls are task-exempt.
     if not snapshot['intelligence'].get('pending') and (not pioneer or pioneer.unit_id not in commands):
@@ -37,12 +39,15 @@ def compute(payload, state=None, deadline=None):
     hub=operator_hub(turn)
     if hub:reserved.add(hub)
     # Mining and trade may continue at night; building remains day-only in policy/guard.
+    for role in turn.controllable():
+        if role.unit_id not in commands and role.unit_id not in recalled:
+            evacuate(turn,role,reserved,commands)
     economy.plan(turn,recalled,reserved,commands,snapshot)
     news.schedule(turn,snapshot,response)
     if pioneer and not turn.phase_task and pioneer.unit_id not in commands:
         pursuing=treasure.plan(turn,pioneer,snapshot,reserved,commands)
         if not pursuing:
-            tasks=[t for t in turn.tasks if t.valid]
+            tasks=[t for t in turn.tasks if t.valid and (not night_caution(turn) or safe_cell(turn,t.position))]
             if tasks:
                 task=max(tasks,key=lambda t:((t.score_reward+.5*t.gold_reward)/(4+distance(pioneer.pos,t.position)),-t.position.x,-t.position.y))
                 if distance(pioneer.pos,task.position)<=1:

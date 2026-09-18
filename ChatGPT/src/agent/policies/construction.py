@@ -55,3 +55,11 @@ def wall_preserves_access(turn,worker,site,reserved):
     mobile_ids={r.unit_id for r in turn.controllable() if r.unit_id!=worker.unit_id}
     static_turn=replace(turn,ours=tuple(r for r in turn.ours if r.unit_id not in mobile_ids))
     return route(static_turn,worker,[hub],(set(reserved)-{hub})|{site})[1]<10**6
+
+
+def upgrade_order(turn, tower):
+    """Enemy-facing x first, then the nearest observed attacking robot."""
+    team=turn.raw.get('teamOur',{}).get('type','')
+    robots=[r for r in turn.robots if r.health>0 and (not team or not r.target_team or r.target_team==team)]
+    return (-facing(turn)*tower.pos.x,
+            min((distance(tower.pos,r.pos) for r in robots),default=0),tower.level,tower.unit_id)

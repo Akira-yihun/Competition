@@ -5,9 +5,10 @@ import json
 from pathlib import Path
 import re
 import sys
+import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
-WORKSPACE = ROOT.parents[4]
+WORKSPACE = ROOT.parents[2]
 errors = []
 required = [
     'README.md', '01-游戏目标与策略分析.md', '02-Loop工程计划.md',
@@ -34,7 +35,11 @@ for path in ROOT.rglob('*.md'):
 manifest = json.loads((ROOT / 'reference/source-manifest.json').read_text())
 for entry in manifest['files']:
     path = WORKSPACE / entry['path']
-    if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != entry['sha256']:
+    if entry.get('git_path'):
+        try:data=subprocess.check_output(['git','show',manifest['baseline_commit']+':'+entry['git_path']],cwd=ROOT.parent)
+        except subprocess.CalledProcessError:data=b''
+    else:data=path.read_bytes() if path.is_file() else b''
+    if hashlib.sha256(data).hexdigest() != entry['sha256']:
         errors.append(f'Source changed since analysis: {entry["path"]}')
 if errors:
     print('\n'.join(errors))

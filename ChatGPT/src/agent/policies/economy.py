@@ -1,12 +1,12 @@
 """Opening construction, stone supply, short sale trips and useful spending."""
-from ..model import distance
+from ..model import Pos, distance
 from ..protocol import move_command, build_command, sell_command
-from ..navigation import route
+from ..navigation import route, night_caution, safe_cell
 from ..world import _neighbours, _walk
 from ..rules import SHOP_PRICES
 from ..intelligence.news import should_hold, mine_value
 from .roles import assign
-from .construction import _tower_sites, TOWER_LOADOUT, wall_sites, wall_preserves_access
+from .construction import _tower_sites, TOWER_LOADOUT, wall_sites, wall_preserves_access, upgrade_order
 
 
 def _max_health(unit):
@@ -15,13 +15,14 @@ def _max_health(unit):
 
 def _upgrade(turn,worker,budget,reserved,commands,claimed):
     station=turn.station()
-    towers=sorted(turn.weapons(),key=lambda t:(t.kind!='rocket',t.level,t.unit_id))
+    towers=sorted(turn.weapons(),key=lambda t:upgrade_order(turn,t))
     walls=sorted(turn.walls(),key=lambda w:(w.health/_max_health(w),w.unit_id))
     buildings=towers+([station] if station else [])+walls
     for target in buildings:
         if not 1<=target.level<3 or target.unit_id in claimed:continue
         prefix='Station' if target.kind=='station' else 'Wall' if target.kind=='wall' else 'Weapon'
         name=f'{prefix}UpgradeVoucher{target.level}'
+        if target.kind=='station':continue  # Reserved for emergency_upgrade.
         if name in worker.backpack:
             claimed.add(target.unit_id)
             if min(distance(worker.pos,p) for p in turn.footprint(target))<=1:
@@ -36,7 +37,8 @@ def _upgrade(turn,worker,budget,reserved,commands,claimed):
             commands[worker.unit_id]={'action':'buy','name':'Medicine','num':1}
             return budget-prices['Medicine'],True
         _walk(turn,worker,shop,reserved,commands);return budget,True
-    for target in buildings:
+    buying=([towers[0]] if towers and all(t.level==1 for t in towers) else [])+([station] if station else [])+towers+walls
+    for target in buying:
         if not 1<=target.level<3 or target.unit_id in claimed:continue
         prefix='Station' if target.kind=='station' else 'Wall' if target.kind=='wall' else 'Weapon'
         name=f'{prefix}UpgradeVoucher{target.level}'
@@ -100,12 +102,15 @@ def plan(turn,recalled,reserved,commands,state=None):
         previous=jobs.get(str(worker.unit_id),{})
         if sellable and vendor:
             name,quantity=max(sellable,key=lambda nc:nc[1]*max(1,prices.get(nc[0],1)))
-            if quantity>=4 or worker.backpack_full or distance(worker.pos,vendor)<=1 or previous.get('kind')=='sell':
+            if worker.backpack_full or distance(worker.pos,vendor)<=1 or previous.get('kind')=='sell' or (previous.get('kind') in ('mine','stone') and Pos.load(previous['target']) not in turn.mines()):
                 jobs[str(worker.unit_id)]={'kind':'sell','target':vendor.dump()}
                 if distance(worker.pos,vendor)<=1:commands[worker.unit_id]=sell_command(name,quantity)
                 else:_walk(turn,worker,vendor,reserved,commands)
                 continue
-        gathering_batch=previous.get('kind')=='stone' and worker.backpack.count('stone')<min(8 if first_day else 6,len(free_walls)) and not worker.backpack_full
+        if turn.is_day and worker==defender and len(turn.weapons())==3:
+            budget,done=_upgrade(turn,worker,budget,reserved,commands,upgrades)
+            if done:continue
+        gathering_batch=previous.get('kind')=='stone' and Pos.load(previous['target']) in turn.stone_mines() and not worker.backpack_full
         builder=first_day or worker==defender
         if turn.is_day and builder and free_walls and 'stone' in worker.backpack and len(turn.weapons())==3 and not gathering_batch:
             front=turn.station().pos.x+(3 if turn.station().pos.x<turn.width/2 else -2)
@@ -120,9 +125,6 @@ def plan(turn,recalled,reserved,commands,state=None):
                 else:_walk(turn,worker,site,reserved,commands)
                 break
             if worker.unit_id in commands:continue
-        if turn.is_day and worker==defender and len(turn.weapons())==3 and not (first_day and free_walls):
-            budget,done=_upgrade(turn,worker,budget,reserved,commands,upgrades)
-            if done:continue
         if worker.backpack_full:
             if vendor and any(should_hold(state,name,turn.round_no) for name,n in minerals if n):
                 jobs[str(worker.unit_id)]={'kind':'hold_for_price','until':min(f['holdUntil'] for f in state['intelligence']['market'] if f.get('holdUntil') and f['holdUntil']>turn.round_no)}
@@ -131,18 +133,27 @@ def plan(turn,recalled,reserved,commands,state=None):
         # One worker stocks a useful batch of stone; the other maintains cash flow.
         stone_job=bool(free_walls and builder and turn.stone_mines() and turn.is_day)
         mines=turn.stone_mines() if stone_job else turn.mines()
-        if not stone_job:
-            nonstone=[p for p in mines if turn.zones[p]!='stone']
-            mines=nonstone or mines
+        mines=[p for p in mines if not night_caution(turn) or safe_cell(turn,p)]
         mines=[p for p in mines if mine_value(state,turn.zones[p],turn.round_no,max(1,prices.get(turn.zones[p],1)))>0]
-        ordered=sorted(mines,key=lambda p:(-mine_value(state,turn.zones[p],turn.round_no,max(1,prices.get(turn.zones[p],1)))/(4+distance(worker.pos,p)+(distance(p,vendor) if vendor else 20)),p.x,p.y))
         if stone_job:
             other_targets={tuple(j['target'].values()) for rid,j in jobs.items() if rid!=str(worker.unit_id) and j.get('kind')=='stone' and isinstance(j.get('target'),dict)}
-            independent=[p for p in mines if (p.x,p.y) not in other_targets]
+            locked=state.get('mine_targets',{}).get(str(worker.unit_id),{}).get('target')
+            independent=[p for p in mines if (p.x,p.y) not in other_targets or p.dump()==locked]
             mines=independent or mines
-            ordered=sorted(mines,key=lambda p:(route(turn,worker,_neighbours(p),reserved)[1]+distance(p,turn.station().pos),p.x,p.y))
-        # While gathering stone, finish a batch before returning to walls.
+        # Score actual walking time, sale distance and current/forecast prices.
+        paths={p:route(turn,worker,_neighbours(p),reserved)[1] for p in mines}
+        ordered=sorted((p for p in mines if paths[p]<10**6),key=lambda p:(
+            -(1 if stone_job else mine_value(state,turn.zones[p],turn.round_no,max(1,prices.get(turn.zones[p],1))))
+            /(2+2*paths[p]+(distance(p,vendor) if vendor else 20)),p.x,p.y))
+        lock=state.setdefault('mine_targets',{}).get(str(worker.unit_id))
+        if lock:
+            old=Pos.load(lock['target'])
+            if old in ordered and turn.zones.get(old)==lock.get('ore'):
+                ordered.remove(old);ordered.insert(0,old)
+            else:state['mine_targets'].pop(str(worker.unit_id),None)
+        # Keep the target across selling trips until it disappears or becomes unsafe.
         for mine in ordered:
+            state.setdefault('mine_targets',{})[str(worker.unit_id)]={'target':mine.dump(),'ore':turn.zones[mine]}
             if distance(worker.pos,mine)<=1:
                 commands[worker.unit_id]={'action':'collect','targetPos':[mine.dump()]}
                 jobs[str(worker.unit_id)]={'kind':'stone' if stone_job else 'mine','target':mine.dump()}

@@ -4,9 +4,9 @@
 
 执行目标：在零协议异常和可控成本基础上，提高正式赛制下的胜率与每场积分（胜 3／平 1／负 0）。先保证基地存活，再提高任务、击杀及生存得分；不能只用总分上涨替代胜负改善。详细策略见同目录 `01-游戏目标与策略分析.md`。
 
-事实来源是仓库 `Competition/docs/任务书.md`（第六至八章）、`Competition/docs/接口文档.md` 和当前源码。本文件是待实现的工程契约；没有执行平台上传、编译或对战，也没有假定平台接口已存在。现有代码入口 `main3.py <port>`，HTTP 监听 `0.0.0.0`；`pyproject.toml` 要求 Python ≥3.11、无运行依赖；未发现 `run.sh`。题目示例要求 `bash run.sh port`，首次实施须补包装启动脚本并确认平台真实打包结构、Python/加密库环境和编译规则，不能直接把现有目录 ZIP 当成已验证提交包。
+事实来源是仓库 `docs/任务书.md`（第六至八章）、`docs/接口文档.md` 和当前源码。本文件是待实现的工程契约；没有执行平台上传、编译或对战，也没有假定平台接口已存在。现有代码入口 `main3.py <port>`，HTTP 监听 `0.0.0.0`；`pyproject.toml` 要求 Python ≥3.11、无运行依赖；未发现 `run.sh`。题目示例要求 `bash run.sh port`，首次实施须补包装启动脚本并确认平台真实打包结构、Python/加密库环境和编译规则，不能直接把现有目录 ZIP 当成已验证提交包。
 
-Git 仓库根目录记为 REPO，即工作区内 `Competition/Demo/CoreGeek`，也是工程根；原始规则位于 `REPO/../../docs`。当前基线 HEAD 为 `e8dc40893232b0a82295c47c1a5ad018b44be7b4`；已存在 `.gitignore` 修改与未跟踪 docs，须保留，禁止 `git add .`。所有需归档材料放在 `REPO/docs/ChatGPT` 下。运行凭证与日志解密私钥不归档、不入 Git、不打包，使用本机安全存储。
+工程根记为 REPO，即工作区内 `CoreGeek/ChatGPT`；Git 仓库根为上一级 `CoreGeek`；原始规则位于 `REPO/../../docs`。当前基线 HEAD 为 `e8dc40893232b0a82295c47c1a5ad018b44be7b4`；已存在 `.gitignore` 修改与未跟踪 docs，须保留，禁止 `git add .`。所有需归档材料放在 `REPO/docs/ChatGPT` 下。运行凭证与日志解密私钥不归档、不入 Git、不打包，使用本机安全存储。
 
 ## 2. 分工及调用契约
 

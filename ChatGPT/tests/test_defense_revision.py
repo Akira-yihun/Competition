@@ -104,7 +104,7 @@ class TaskDiagnosticTests(unittest.TestCase):
                 p=payload(3,'调测任务');p['llmResp']='42';s.decide(p)
                 p=payload(4,'调测任务');p['llmResp']='42';s.decide(p)
                 flush()
-            events=[json.loads(l) for l in path.read_text().splitlines()]
+            events=[json.loads(l.removeprefix('diagnostics ')) for l in path.read_text().splitlines() if l.startswith('diagnostics ')]
             self.assertIn('矿价变化',events[0]['worldNews'])
             self.assertEqual(events[0]['phaseTask'],'调测任务')
             self.assertEqual(events[1]['llmResp'],'{broken')

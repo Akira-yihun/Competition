@@ -2,7 +2,7 @@
 from ..model import distance
 from ..navigation import route
 from ..protocol import move_command, attack_command
-from .construction import operator_hub, operator_stands
+from .construction import operator_hub, operator_stands, upgrade_order
 from .combat import _attack_targets
 from .roles import assign
 
@@ -28,13 +28,13 @@ def plan(turn,available,reserved,commands,state=None):
     state['defense']={'day':(turn.round_no-1)//130,'mobilized':[str(worker.unit_id)]}
     towers=turn.weapons();hub=operator_hub(turn)
     goals=[hub] if hub and all(distance(hub,t.pos)<=1 for t in towers) else [p for t in towers for p in operator_stands(turn,t)]
-    step,length=route(turn,worker,goals,reserved) if goals else (None,10**6)
+    step,length=route(turn,worker,goals,reserved,cautious=False) if goals else (None,10**6)
     state['defense_assignments']=[{'role':worker.unit_id,'tower':t.unit_id,'distance':distance(worker.pos,t.pos),'path_length':length} for t in towers]
     if step is not None:
         commands[worker.unit_id]=move_command(step);reserved.add(step)
     elif length==0:
         reserved.add(worker.pos)
-        for tower in sorted(towers,key=lambda t:(t.level,t.unit_id)):
+        for tower in sorted(towers,key=lambda t:upgrade_order(turn,t)):
             voucher=f'WeaponUpgradeVoucher{tower.level}'
             if tower.level<3 and voucher in worker.backpack and distance(worker.pos,tower.pos)<=1:
                 commands[worker.unit_id]={'action':'use','name':voucher,'targetPos':[tower.pos.dump()]}
@@ -55,3 +55,24 @@ def _tower_pairs(turn,roles=None):
     """Compatibility inspection: one eligible worker owns the whole battery."""
     workers=[r for r in (turn.workers() if roles is None else roles) if r.kind=='worker']
     return tuple((workers[0],tower) for tower in turn.weapons()) if workers else ()
+
+
+def emergency_upgrade(turn,state,reserved,commands):
+    station=turn.station();worker,_=assign(turn,state)
+    if not station or not worker or station.level>=3:return False
+    name=f'StationUpgradeVoucher{station.level}'
+    if name not in worker.backpack:return False
+    team=turn.raw.get('teamOur',{}).get('type','')
+    damage={'smallRobot':5,'middleRobot':10,'largeRobot':20,'bossRobot':40}
+    incoming=sum(damage.get(r.kind,40)*2 for r in turn.robots if r.health>0
+                 and (not team or not r.target_team or r.target_team==team)
+                 and min(distance(r.pos,p) for p in turn.footprint(station))<=5)
+    if station.health>=100 and station.health>incoming:return False
+    if min(distance(worker.pos,p) for p in turn.footprint(station))<=1:
+        commands[worker.unit_id]={'action':'use','name':name,'targetPos':[station.pos.dump()]}
+    else:
+        from ..world import _neighbours
+        goals=[q for p in turn.footprint(station) for q in _neighbours(p)]
+        step,_=route(turn,worker,goals,reserved,cautious=False)
+        if step is not None:commands[worker.unit_id]=move_command(step);reserved.add(step)
+    return True

@@ -5,7 +5,7 @@ import math
 from pathlib import Path
 import sys
 
-PROJECT = Path(__file__).resolve().parents[3]
+PROJECT = Path(__file__).resolve().parents[2]
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(PROJECT / 'src'))
 from agent.protocol import Turn

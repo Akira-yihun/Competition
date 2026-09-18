@@ -2,16 +2,16 @@
 
 ## 使用边界
 
-这是供另一个 Agent CLI 实现及运行闭环的交接合同，不是已经接通平台的自动运行器。本次交付只写入本目录，不修改参赛代码、不提交 Git、不上传、不发起比赛。平台接口、运行环境和日志出口待用户补充后才能执行对应阶段。仓库根是 `Competition/Demo/CoreGeek`；文档内相对路径以本目录为准，源码路径以仓库根为准；JSON 配置路径按其 path_resolution 字段解析。
+这是供另一个 Agent CLI 实现及运行闭环的交接合同，不是已经接通平台的自动运行器。本次交付只写入本目录，不修改参赛代码、不提交 Git、不上传、不发起比赛。平台接口、运行环境和日志出口待用户补充后才能执行对应阶段。工程根是 `CoreGeek/ChatGPT`，Git 根是上一级 `CoreGeek`；文档内相对路径以本目录为准，源码路径以工程根为准；JSON 配置路径按其 path_resolution 字段解析。
 
 外层开发 Agent CLI 负责编辑代码、验证、提交、发布和赛后分析；游戏内 `prompt`/`llmResp` 与 `executeCmd` 属于判题器的逐回合通道，二者不能混用。不要将开发 CLI API 密钥放入参赛包。
 
 ## 可直接复制给另一个 Agent 的启动指令
 
 ```text
-你在 CoreGeek 仓库内开发《未来战争》参赛程序。
-先读 docs/ChatGPT/README.md，再顺序阅读 01、02、03、04 文档及 templates/ 的配置。
-以 ../../docs/任务书.md、../../docs/接口文档.md 为规则依据（相对 CoreGeek 根）。
+你在 CoreGeek/ChatGPT 工程目录内开发《未来战争》参赛程序。
+先读 docs/README.md，再顺序阅读 01、02、03、04 文档及 templates/ 的配置。
+以 ../../docs/任务书.md、../../docs/接口文档.md 为规则依据（相对 CoreGeek/ChatGPT 工程根）。
 读取工作区状态，保留已有用户修改，不使用 git add .、git reset --hard 或覆盖用户分支。
 如果还未实现 loop runner，先实现它并以本地 mock 平台验证完整状态机；不要把文档中的伪接口当真实接口。
 若平台配置未完成，继续做本地独立开发与校验，把受阻阶段标为 BLOCKED_CONFIG，不能伪造上传、编译或胜率。
