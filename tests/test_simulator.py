@@ -54,9 +54,11 @@ class SimulatorTests(unittest.TestCase):
         t['roles'][1]['pos']=sim.pos((10,25))
         t['active']=dict(index=0,start=1)
         t['phaseTask']='LOCAL FIXTURE 6 × 7，答案42'
+        from agent.state import Session
+        session=Session()
         for _ in range(8):
             m.begin()
-            response=sim.candidate(m.observation(0))
+            response=session.decide(m.observation(0))
             m.step([response,EMPTY])
             if m.metrics[0]['completed_tasks']:
                 break

@@ -18,11 +18,13 @@ def _record(payload,response,state,status='decision',error=None):
            'llmResp':bounded('llmResp',payload.get('llmResp','')),
            'lastCmdResult':bounded('lastCmdResult',payload.get('lastCmdResult','')),
            'errors':payload.get('errors',[]),'actionResults':payload.get('lastRoundRoleActionResults',{}),
-           'taskState':{k:task.get(k) for k in ('instance','status','pending','last_parse_reason','parse_rejections','sequence')},
+           'taskState':{k:task.get(k) for k in ('instance','status','pending','last_parse_reason','parse_rejections','sequence','stage','understanding')},
            'submittedAnswers':{k:bounded('answer:'+k,c['taskAnswer']) for k,c in response.get('roleCommandMap',{}).items() if c.get('action')=='submitAnswer'},
            'prompt':bounded('prompt',response.get('prompt',''),180000),'executeCmd':response.get('executeCmd',''),
            'commands':response.get('roleCommandMap',{}),'guardDropped':state.get('guard_dropped',{}),
            'defenseAssignments':state.get('defense_assignments',[]),
+           'roleDuties':state.get('role_duties',{}),'economyJobs':state.get('economy_jobs',{}),
+           'intelligence':state.get('intelligence',{}),'treasureResult':payload.get('lastSummonTreasureResult',0),
            'ourUnits':[{k:r.get(k) for k in ('id','roleType','pos','health','level','backpack')} for r in team.get('roles',[])],
            'error':error,'truncatedCharacters':truncations}
     emit(event)

@@ -1,4 +1,5 @@
 """Independent final checks; no reward optimization or side effects."""
+from collections import Counter
 from .model import Pos, distance
 from .rules import TOWER_TYPES
 from .protocol import empty_response
@@ -55,6 +56,9 @@ def legal(rid, cmd, turn):
         if name=='WallFixer':return target.kind=='wall'
         group='Station' if target.kind=='station' else 'Weapon' if target.kind in TOWER_TYPES else 'Wall'
         return target.level in (1,2) and name==f'{group}UpgradeVoucher{target.level}'
+    if action=='summonTreasure':
+        items=cmd.get('item')
+        return unit.kind=='pioneer' and not turn.phase_task and len(points)==1 and distance(unit.pos,points[0])<=1 and isinstance(items,list) and all(isinstance(i,str) for i in items) and not (Counter(items)-Counter(unit.backpack))
     if action=='acceptTask':
         return unit.kind=='pioneer' and not turn.phase_task and any(t.valid and distance(unit.pos,t.position)<=1 for t in turn.tasks)
     if action=='submitAnswer':
@@ -76,7 +80,7 @@ def validate(response, turn):
     active=bool(turn.phase_task and any(r.kind=='pioneer' for r in turn.controllable()))
     for key,limit in [('prompt',180000),('executeCmd',12000)]:
         value=response.get(key,'')
-        if active and isinstance(value,str) and len(value)<=limit:
+        if (active or key=='prompt') and isinstance(value,str) and len(value)<=limit:
             result[key]=value
     if result['executeCmd']:
         result['prompt']=''

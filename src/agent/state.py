@@ -57,6 +57,7 @@ class Session:
                 response=empty_response()
                 new_state=deepcopy(self.state)
                 new_state['task']=None  # Unknown pending calls cannot survive fallback.
+                if new_state.get('intelligence'):new_state['intelligence']['pending']=None
                 new_state['fallbacks']=new_state.get('fallbacks',0)+1
             new_state['last_round']=turn.round_no
             new_state['version']=version+1

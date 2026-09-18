@@ -169,17 +169,22 @@ class HTTPIntegration(unittest.TestCase):
         self.assertEqual(first, self.post(payload))
         context = json.loads(first['prompt'].split('\n', 1)[1])
         payload['roundNo'] = 11
+        payload['llmResp'] = json.dumps({**{k: context[k] for k in ('taskKey','requestId','roundNo')}, 'taskUnderstanding': {'objective':'calculate','verification':'check'}})
+        understood = self.post(payload)
+        context = json.loads(understood['prompt'].split('\n',1)[1])
+        self.assertEqual(context['stage'],'solve')
+        payload['roundNo'] = 12
         payload['llmResp'] = json.dumps({**{k: context[k] for k in ('taskKey', 'requestId', 'roundNo')}, 'executeCmd': 'printf 42'})
         command = self.post(payload)
         self.assertEqual(command['executeCmd'], 'printf 42')
         self.assertEqual(command, self.post(payload))
-        payload['roundNo'] = 12
+        payload['roundNo'] = 13
         payload['llmResp'] = ''
         payload['lastCmdResult'] = '[exitCode:0]\n42\n'
         continued = self.post(payload)
         self.assertIn('[exitCode:0]', continued['prompt'])
         context = json.loads(continued['prompt'].split('\n', 1)[1])
-        payload['roundNo'] = 13
+        payload['roundNo'] = 14
         payload['llmResp'] = json.dumps({**{k: context[k] for k in ('taskKey', 'requestId', 'roundNo')}, 'taskAnswer': '42'})
         answer = self.post(payload)
         self.assertTrue(any(c.get('taskAnswer') == '42' for c in answer['roleCommandMap'].values()))
@@ -203,7 +208,7 @@ class PackagedHTTPIntegration(HTTPIntegration):
     @classmethod
     def setUpClass(cls):
         cls.extracted = tempfile.TemporaryDirectory(prefix='coregeek-http-package-')
-        archive = ROOT / 'artifacts/coregeek-v0.2.tar.gz'
+        archive = ROOT / 'artifacts/coregeek-v0.4.tar.gz'
         # Always validate current source, never a stale package.
         subprocess.run([sys.executable, str(ROOT/'tools/package.py')], check=True)
         with tarfile.open(archive) as package:

@@ -34,13 +34,16 @@ class SessionTests(unittest.TestCase):
 
     def test_task_command_evidence_answer_roundtrip(self):
         s=Session();a=s.decide(payload(1,'task'))
-        p=payload(2,'task');p['llmResp']=model_reply(a,executeCmd='printf 42')
+        self.assertEqual(json.loads(a['prompt'].split('\n',1)[1])['stage'],'understand')
+        p=payload(2,'task');p['llmResp']=model_reply(a,taskUnderstanding={'objective':'calculate','verification':'check'})
+        a=s.decide(p);self.assertEqual(json.loads(a['prompt'].split('\n',1)[1])['stage'],'solve')
+        p=payload(3,'task');p['llmResp']=model_reply(a,executeCmd='printf 42')
         b=s.decide(p);self.assertEqual(b['executeCmd'],'printf 42');self.assertEqual(b['prompt'],'')
-        p=payload(3,'task');p['lastCmdResult']='[exitCode:0]\n42\n'
+        p=payload(4,'task');p['lastCmdResult']='[exitCode:0]\n42\n'
         c=s.decide(p);self.assertIn('[exitCode:0]',c['prompt'])
-        p=payload(4,'task');p['llmResp']=model_reply(c,taskAnswer='42')
+        p=payload(5,'task');p['llmResp']=model_reply(c,taskAnswer='42')
         d=s.decide(p);self.assertEqual(d['roleCommandMap']['10011']['taskAnswer'],'42');self.assertEqual(d['prompt'],'')
-        s.decide(payload(5,''));self.assertFalse(s.state['memory'][0]['verified'])
+        s.decide(payload(6,''));self.assertFalse(s.state['memory'][0]['verified'])
 
     def test_same_text_new_instance_rejects_old_response(self):
         s=Session();a=s.decide(payload(1,'same'));s.decide(payload(2,''));b=s.decide(payload(3,'same'))

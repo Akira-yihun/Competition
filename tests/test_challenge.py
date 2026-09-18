@@ -137,24 +137,16 @@ class RuleChallenges(unittest.TestCase):
         self.assertEqual(len(decide(payload)["roleCommandMap"]["10020"]["targetPos"]), 1)
 
     def test_task_echo_rejects_stale_round_and_wrong_task(self):
+        from agent.state import Session
         payload = observation(10)
-        payload["teamOur"]["roles"] += [unit(10011, "pioneer", 5, 5)]
-        payload["phaseTask"] = "Return verified data from the sandbox"
-        initial = decide(payload)
-        context = json.loads(initial["prompt"].split("\n", 1)[1])
-        payload["roundNo"] = 11
-        for overrides in [dict(roundNo=8), dict(taskKey="wrong")]:
-            answer = dict(taskKey=context["taskKey"], roundNo=10, executeCmd="printf task-proof")
-            answer.update(overrides)
-            payload["llmResp"] = json.dumps(answer)
-            self.assertEqual(decide(payload)["executeCmd"], "")
-        payload["llmResp"] = json.dumps(dict(taskKey=context["taskKey"], roundNo=10,
-                                                 executeCmd="printf task-proof"))
-        actual = decide(payload)
-        self.assertEqual(actual["executeCmd"], "printf task-proof")
-        self.assertEqual(actual["prompt"], "")
-        payload["phaseTask"] = ""
-        self.assertEqual(decide(payload)["executeCmd"], "")
+        payload['teamOur']['roles'] += [unit(10011,'pioneer',5,5)]
+        payload['phaseTask']='Return verified data from the sandbox'
+        for overrides,expected in [(dict(roundNo=8),''),(dict(taskKey='wrong'),''),({},'printf task-proof')]:
+            session=Session();initial=session.decide(payload)
+            context=json.loads(initial['prompt'].split('\n',1)[1])
+            follow=copy.deepcopy(payload);follow['roundNo']=11
+            follow['llmResp']=json.dumps({**{k:context[k] for k in ('taskKey','roundNo','requestId')},'executeCmd':'printf task-proof',**overrides})
+            self.assertEqual(session.decide(follow)['executeCmd'],expected)
 
     def test_unreachable_goal_returns_sentinel(self):
         payload = observation(1)

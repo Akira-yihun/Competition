@@ -16,6 +16,10 @@ def parse_with_reason(text,pending,instance):
     if isinstance(value,dict):
         for key,expected in [('taskKey',instance),('requestId',pending['id']),('roundNo',pending['round'])]:
             if key in value and value[key]!=expected:return None,'mismatched_'+key
+        understanding=value.get('taskUnderstanding')
+        if isinstance(understanding,dict) and not value.get('executeCmd') and not value.get('taskAnswer'):
+            if len(json.dumps(understanding))<=16000:return ('understanding',understanding),'task_understood'
+            return None,'understanding_too_large'
         command=value.get('executeCmd');answer=value.get('taskAnswer')
         if isinstance(answer,(dict,list,int,float,bool)):answer=json.dumps(answer,ensure_ascii=False)
         if bool(command)==bool(answer):

@@ -3,7 +3,7 @@ from ..model import Pos, distance
 from ..navigation import route
 from ..world import _neighbours, _cells_at_distance
 
-TOWER_LOADOUT = ('rocket', 'gatling', 'railgun')
+TOWER_LOADOUT = ('rocket', 'rocket', 'rocket')
 
 
 def facing(turn):
@@ -11,15 +11,21 @@ def facing(turn):
     return 1 if station and station.pos.x < turn.width/2 else -1
 
 
+def operator_hub(turn):
+    station=turn.station()
+    if not station:return None
+    x,y=station.pos.x,station.pos.y
+    return Pos(x-2,y-1) if facing(turn)==1 else Pos(x+3,y)
+
+
 def _tower_sites(turn):
     station=turn.station()
     if not station:return ()
     x,y=station.pos.x,station.pos.y
-    # Rotate the whole layout, preserving clear cardinal corridors around base.
-    corners=([Pos(x+2,y-2),Pos(x+2,y+1),Pos(x-1,y+1),Pos(x-1,y-2)]
-             if facing(turn)==1 else
-             [Pos(x-1,y+1),Pos(x-1,y-2),Pos(x+2,y-2),Pos(x+2,y+1)])
-    return tuple(p for p in corners if turn.land(p))[:3]
+    # Three legal inner-ring cells all within one cell of the rear operator hub.
+    sites=([Pos(x-1,y-2),Pos(x-1,y-1),Pos(x-1,y)] if facing(turn)==1 else
+           [Pos(x+2,y+1),Pos(x+2,y),Pos(x+2,y-1)])
+    return tuple(p for p in sites if turn.land(p))
 
 
 def wall_sites(turn):
@@ -36,19 +42,16 @@ def wall_sites(turn):
 
 
 def operator_stands(turn,tower):
-    station=turn.station()
-    candidates=[p for p in _neighbours(tower.pos) if turn.land(p)]
-    if not station:return tuple(candidates)
-    ring=set(_cells_at_distance(station.pos,1))
-    inside=[p for p in candidates if p in ring]
-    return tuple(inside or candidates)
+    hub=operator_hub(turn)
+    if hub and turn.land(hub) and distance(hub,tower.pos)<=1:return (hub,)
+    return tuple(p for p in _neighbours(tower.pos) if turn.land(p))
 
 
 def wall_preserves_access(turn,worker,site,reserved):
-    """Do not seal the builder outside or erase a tower's only operator cell."""
-    extra=set(reserved)|{site}
-    for tower in turn.weapons():
-        goals=[p for p in operator_stands(turn,tower) if p not in extra]
-        if not goals or route(turn,worker,goals,extra)[1]>=10**6:
-            return False
-    return True
+    hub=operator_hub(turn)
+    if hub is None or site==hub:return False
+    # The wall must leave a geometric route; moving teammates do not seal a wall.
+    from dataclasses import replace
+    mobile_ids={r.unit_id for r in turn.controllable() if r.unit_id!=worker.unit_id}
+    static_turn=replace(turn,ours=tuple(r for r in turn.ours if r.unit_id not in mobile_ids))
+    return route(static_turn,worker,[hub],(set(reserved)-{hub})|{site})[1]<10**6
