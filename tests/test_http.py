@@ -42,7 +42,7 @@ class HTTPIntegration(unittest.TestCase):
         launch_root = Path(os.environ.get('CORE_GEEK_TEST_ROOT', str(ROOT)))
         launch = ['bash', 'run.sh', str(cls.port)] if launch_root == ROOT else [sys.executable, 'main3.py', str(cls.port)]
         cls.process = subprocess.Popen(launch, cwd=launch_root,
-                                       env=dict(os.environ, PYTHON=sys.executable),
+                                       env=dict(os.environ, PYTHON=sys.executable, CORE_GEEK_DEBUG_LOG='off'),
                                        stdout=cls.logs, stderr=subprocess.STDOUT)
         deadline = time.monotonic() + 8
         last_error = None
@@ -241,7 +241,7 @@ class BoundedDecisionChallenges(unittest.TestCase):
         pipe = Mock()
         with patch.object(runtime, 'compute', side_effect=RuntimeError(SECRET)):
             runtime._worker({'llmResp': SECRET}, {}, time.monotonic()+3, pipe)
-        pipe.send.assert_called_once_with(None)
+        pipe.send.assert_called_once_with({'worker_error':'RuntimeError','message':SECRET})
         pipe.close.assert_called_once()
 
     def test_stalled_worker_is_terminated_and_next_decision_works(self):

@@ -1,7 +1,7 @@
 """Task instance and asynchronous command/model feedback state machine."""
 import hashlib
 import json
-from .channel import parse
+from .channel import parse_with_reason
 from .memory import archive
 
 
@@ -23,16 +23,29 @@ def advance(turn, pioneer, state, commands, response):
     pending=task.get('pending')
     consecutive=state.get('last_round',0)==turn.round_no-1
     parsed=None
-    if pending and consecutive and pending['round']==turn.round_no-1:
+    if pending and consecutive and 0 < turn.round_no-pending['round'] <= 5:
         if pending['kind']=='model':
-            parsed=parse(turn.llm_response,pending,task['instance'])
+            parsed,reason=parse_with_reason(turn.llm_response,pending,task['instance'])
+            task['last_parse_reason']=reason
+            if reason=='empty_llm_response' and turn.round_no-pending['round']<5:
+                task['status']='MODEL_PENDING'
+                return
+            if parsed is None:
+                task['parse_rejections']=task.get('parse_rejections',0)+1
         elif pending['kind']=='command':
-            task['evidence']=str(turn.raw.get('lastCmdResult',''))[-65536:]
+            result=str(turn.raw.get('lastCmdResult',''))
+            if not result and turn.round_no-pending['round']<3:
+                task['last_parse_reason']='waiting_command_result'
+                return
+            task['evidence']=result[-65536:]
+            task['last_parse_reason']='command_feedback' if result else 'missing_command_result'
         elif pending['kind']=='submit':
-            task['status']='ACTIVE'  # Still present; no unsupported success inference.
+            task['status']='ACTIVE'
+            task['last_parse_reason']='task_still_active_after_submission'
     elif pending:
         task['evidence']=''
         task['status']='RESYNC'
+        task['last_parse_reason']='gap_or_expired_pending_call'
         state['unmatched_feedback']=state.get('unmatched_feedback',0)+1
     task['pending']=None
     if parsed:
@@ -55,6 +68,8 @@ def advance(turn, pioneer, state, commands, response):
     context={'taskKey':task['instance'],'requestId':request_id,'roundNo':turn.round_no,
              'task':turn.phase_task,'lastCmdResult':task['evidence'],
              'errors':turn.raw.get('errors',[]),'previousAnswer':task.get('answer',''),
+             'previousResponse':turn.llm_response[-16000:],'formatFeedback':task.get('last_parse_reason',''),
+             'recentCommands':task.get('commands',[])[-3:],
              'verifiedSOPs':[m for m in state.get('memory',[]) if m.get('verified') and m['task_hash']==text_hash][:2]}
     response['prompt']=('你是比赛任务解题器。只输出JSON，原样回传taskKey、requestId、roundNo；'
         '有证据时填写taskAnswer字符串，否则填写executeCmd字符串，二者只选一个。'

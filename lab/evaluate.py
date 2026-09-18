@@ -1,5 +1,6 @@
 """Versioned local match evaluation; never an official promotion signal."""
 import argparse
+import os
 import hashlib
 import json
 import time
@@ -7,6 +8,7 @@ from collections import Counter
 from pathlib import Path
 from .referee import Match, ROOT, LIMITATIONS, baseline
 from agent.state import Session
+from agent.telemetry.writer import flush
 
 def run(seed, rounds, swapped, output, profile="reasoning"):
     match = Match(seed, profile)
@@ -33,6 +35,8 @@ def run(seed, rounds, swapped, output, profile="reasoning"):
             match.step(responses)
             for side in (0,1):
                 f.write(json.dumps(dict(seed=seed, swapped=swapped, agent=labels[side], side=side, round=round_no, request=requests[side], response=responses[side], validation=match.teams[side]['results'], errors=match.teams[side]['errors']), ensure_ascii=False, separators=(',', ':'))+'\n')
+            # Simulation runs faster than platform turns; drain diagnostics in batches.
+            if round_no % 50 == 0:flush()
             if all(t['death'] is not None for t in match.teams) or all(t['exceptions'] >= 5 for t in match.teams): break
     winner = match.outcome()
     return dict(seed=seed, swapped=swapped, rounds=match.round-1, winner=labels[winner] if winner is not None else 'draw', stream=str(stream), teams={label: dict(side=side, score=round(t['totalScore'], 4), score_breakdown={k: round(match.metrics[side][k],4) for k in ('task_score','kill_score','survival_score')}, gold=t['goldNum'], station_destroyed_round=t['death'], station_health=next((r['health'] for r in t['roles'] if r['roleType']=='station'),0), metrics=dict(match.metrics[side]), decide_ms=dict(max=round(max(latencies[side]),3), p95=round(sorted(latencies[side])[min(len(latencies[side])-1, int(len(latencies[side])*.95))],3))) for side,(label,t) in enumerate(zip(labels,match.teams))})
@@ -46,6 +50,7 @@ def main():
     args = parser.parse_args()
     if not 1 <= args.rounds <= 1300: parser.error('--rounds must be 1..1300')
     args.output.mkdir(parents=True, exist_ok=True)
+    os.environ.setdefault('CORE_GEEK_DEBUG_LOG',str(args.output/'debug.ndjson'))
     initial_hashes = {str(p.relative_to(ROOT)):hashlib.sha256(p.read_bytes()).hexdigest() for directory in (ROOT/'src'/'agent', ROOT/'lab', ROOT/'tools'/'baseline_agent') for p in directory.rglob('*.py')}
     halves = [run(seed,args.rounds,swap,args.output,args.task_profile) for seed in map(int,args.seeds.split(',')) for swap in (False,True)]
     matches = []
@@ -61,6 +66,8 @@ def main():
     result = dict(source_sha256=source_hashes, source_unchanged=all(source_hashes.get(k)==v for k,v in initial_hashes.items()), comparison_eligible=args.task_profile=='reasoning', task_profile=args.task_profile, kind='approximate_local_simulation', limitations=LIMITATIONS, fixture=dict(task_answer='42', command_execution=False, llm='deterministic_fixture'), rounds_limit=args.rounds, halves=halves, matches=matches, match_outcomes=dict(Counter(m['winner'] for m in matches)))
     path = args.output/'summary.json'
     path.write_text(json.dumps(result,ensure_ascii=False,indent=2)+'\n')
+    from agent.telemetry.writer import flush
+    flush()
     print(json.dumps(dict(summary=str(path), match_outcomes=result['match_outcomes'], warning=LIMITATIONS[0]),ensure_ascii=False))
 
 if __name__ == "__main__": main()

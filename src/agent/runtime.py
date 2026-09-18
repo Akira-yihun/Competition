@@ -9,8 +9,8 @@ from .state import SessionStore
 def _worker(payload,snapshot,deadline,pipe):
     try:
         pipe.send(compute(payload,snapshot,deadline))
-    except Exception:
-        pipe.send(None)
+    except Exception as exc:
+        pipe.send({'worker_error':type(exc).__name__,'message':str(exc)[:2000]})
     finally:
         pipe.close()
 
@@ -22,7 +22,10 @@ def execute(payload,snapshot,deadline):
     try:
         process.start();writer.close()
         remaining=max(0,min(DEFAULT.decision_seconds,deadline-monotonic()-0.25))
-        return reader.recv() if reader.poll(remaining) else None
+        result=reader.recv() if reader.poll(remaining) else None
+        if isinstance(result,dict) and 'worker_error' in result:
+            raise RuntimeError(result['worker_error']+': '+result['message'])
+        return result
     except (EOFError,OSError,ValueError):
         return None
     finally:

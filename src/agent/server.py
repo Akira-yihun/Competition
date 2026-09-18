@@ -1,4 +1,4 @@
-"""Bounded HTTP transport; sensitive request/answer text is never logged."""
+"""Bounded HTTP transport; user-enabled plaintext diagnostics live in telemetry."""
 import json
 import socket
 import threading

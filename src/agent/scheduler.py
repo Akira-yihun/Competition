@@ -2,7 +2,7 @@
 from dataclasses import dataclass, field
 from typing import Any
 from .model import Pos
-from .rules import TOWER_TYPES
+from .rules import TOWER_TYPES, SHOP_PRICES
 
 @dataclass(frozen=True)
 class Intent:
@@ -35,7 +35,7 @@ class ReservationTable:
                 return False
         if action=='buy':
             prices={i['name']:i['price'] for i in turn.raw.get('weaponShopList',[]) if isinstance(i,dict) and 'name' in i and 'price' in i}
-            price=prices.get(cmd['name'])
+            price=prices.get(cmd['name'],SHOP_PRICES.get(cmd['name']))
             if price is None and 'UpgradeVoucher' in cmd['name']:
                 price=100 if cmd['name'].endswith('1') else 150
             if type(price) is not int or price <= 0:

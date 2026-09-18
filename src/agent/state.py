@@ -8,6 +8,7 @@ from time import monotonic
 from .engine import compute, Decision
 from .protocol import decode, empty_response
 from .config import DEFAULT
+from .telemetry.events import record
 
 
 def digest(payload):
@@ -37,18 +38,22 @@ class Session:
         try:
             cached=self.cache.get(turn.round_no)
             if cached:
-                return deepcopy(cached[1]) if cached[0]==fingerprint else empty_response()
+                response=deepcopy(cached[1]) if cached[0]==fingerprint else empty_response()
+                record(payload,response,self.state,'replay' if cached[0]==fingerprint else 'conflicting_request')
+                return response
             if turn.round_no<=self.state['last_round']:
                 return empty_response()
             snapshot=deepcopy(self.state)
             version=self.state["version"]
+            error=None
             try:
                 result=(executor or compute)(payload,snapshot,deadline)
                 if result is None or result.based_on_version!=version or monotonic()>=deadline:
                     raise TimeoutError('discarded decision')
                 response=result.response
                 new_state=result.state
-            except Exception:
+            except Exception as exc:
+                error={'type':type(exc).__name__,'message':str(exc)[:2000]}
                 response=empty_response()
                 new_state=deepcopy(self.state)
                 new_state['task']=None  # Unknown pending calls cannot survive fallback.
@@ -56,6 +61,7 @@ class Session:
             new_state['last_round']=turn.round_no
             new_state['version']=version+1
             self.state=new_state
+            record(payload,response,new_state,error=error)
             self.cache[turn.round_no]=(fingerprint,deepcopy(response))
             while len(self.cache)>DEFAULT.cached_rounds:
                 self.cache.popitem(last=False)

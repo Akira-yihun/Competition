@@ -24,6 +24,7 @@ TOWERS = ('gatling', 'railgun', 'rocket')
 MOBILE = ('worker', 'pioneer')
 RANGES = {'gatling': (3, 5, 7), 'railgun': (6, 8, 10), 'rocket': (10, 15, 99)}
 PRICES = {f'{kind}UpgradeVoucher{level}': price for kind, costs in [('Weapon', (100, 150)), ('Station', (100, 150)), ('Wall', (20, 30))] for level, price in enumerate(costs, 1)}
+PRICES.update({'Medicine':10,'WallFixer':10})
 ROBOT = {'smallRobot': (40, 5, 1), 'middleRobot': (60, 10, 2), 'largeRobot': (500, 20, 4), 'bossRobot': (800, 40, 10)}
 LIMITATIONS = [
     'Approximate local referee, NOT official win rate or official judgement.',
@@ -32,7 +33,7 @@ LIMITATIONS = [
     'Synthetic tasks have answer 42, 50 score/60 gold, 30-round timeout, 30-round refresh, 8 tasks per point; deterministic mock LLM, no real LLM.',
     'executeCmd is NEVER executed: every task command receives an explicit fixture output. No actual sandbox/API task solving is assessed.',
     'Gatling/railgun lines use cell-centre supercover; official boundary/intersection details are unknown. Friendly-fire and PvP damage are unsupported.',
-    'Treasure, news-driven disruptions, robot summon orders and non-upgrade consumables are unsupported; emitted actions fail explicitly.',
+    'Treasure, news-driven disruptions, robot summon orders and consumables other than Medicine/WallFixer are unsupported; emitted actions fail explicitly.',
     'Same-turn economy resolves by ascending role ID; moving into a vacated cell is allowed unless a swap/collision occurs. Role/robot cross-motion is conservative.',
     'Robot AI targets nearest opposing obstruction within range 3, otherwise greedily approaches station; not the official robot AI.',
     'Round numbers start at 1; task-point-2 second-cell placement, spawn positions and damage tie credit are local assumptions.',
@@ -192,7 +193,7 @@ class Match:
                         raise ValueError('missing controllerId')
                     if action == 'submitAnswer' and 'taskAnswer' not in command:
                         raise ValueError('missing taskAnswer')
-                    if action == 'use' and (command.get('name') in PRICES or command.get('name') in ('WallFixer', 'Bomb', 'DizzyWeapon')) and not targets:
+                    if action == 'use' and (command.get('name') in PRICES and command.get('name')!='Medicine' or command.get('name') in ('WallFixer', 'Bomb', 'DizzyWeapon')) and not targets:
                         raise ValueError('use requires targetPos')
                     if action == 'summonTreasure' and 'item' not in command:
                         raise ValueError('summonTreasure requires item')
@@ -336,9 +337,17 @@ class Match:
                 self.metrics[side]['towers_built'] += 1
             t['roles'].append(unit(uid, name, target)); return True
         if action == 'use':
-            if name not in pack or name not in PRICES or target is None: return False
+            if name not in pack or name not in PRICES: return False
+            if name=='Medicine':
+                pack.remove(name);r['health']=200 if r['roleType']=='pioneer' else 220
+                self.metrics[side]['heals']+=1;return True
+            if target is None:return False
             building = next((u for u in t['roles'] if target in cells(u) and u['roleType'] not in MOBILE), None)
             if building is None or min(dist(xy(r), p) for p in cells(building)) > 1: return False
+            if name=='WallFixer':
+                if building['roleType']!='wall':return False
+                pack.remove(name);building['health']=500+500*building['level']
+                self.metrics[side]['repairs']+=1;return True
             kind = building['roleType']; group = 'Weapon' if kind in TOWERS else 'Station' if kind == 'station' else 'Wall'
             level = building['level']
             if level >= 3 or name != f'{group}UpgradeVoucher{level}': return False

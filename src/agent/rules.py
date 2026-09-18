@@ -19,3 +19,10 @@ TOWER_RANGE_BY_LEVEL = {
 }
 
 
+
+SHOP_PRICES = {
+    'WeaponUpgradeVoucher1':100, 'WeaponUpgradeVoucher2':150,
+    'StationUpgradeVoucher1':100, 'StationUpgradeVoucher2':150,
+    'WallUpgradeVoucher1':20, 'WallUpgradeVoucher2':30,
+    'Medicine':10, 'WallFixer':10,
+}

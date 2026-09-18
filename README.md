@@ -1,4 +1,4 @@
-# CoreGeek v0.2
+# CoreGeek v0.3 调测版
 
 按新设计完成参赛服务、策略模块、任务状态和本地评测的重构。`main3.py` 保持原样，正式启动脚本由平台提供；仓库 `run.sh` 仅用于本地测试，不进入提交包。
 
@@ -28,7 +28,7 @@ bash run.sh 8080
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 python3 -m lab.evaluate --seeds 1,2,3 --rounds 1300 --output artifacts/v02-simulation
 python3 -m lab.replay --input artifacts/v02-simulation/seed-1-normal.ndjson --output artifacts/v02-replay.ndjson
-python3 tools/package.py
+python3 tools/package.py --output artifacts/coregeek-v0.3.tar.gz
 ```
 
 HTTP测试需要本机端口权限。源码服务经本地shell启动；解压包直接通过原 `main3.py` 启动，验证平台入口兼容性。测试包每次重新构建，避免误测旧包。
@@ -49,8 +49,21 @@ python3 -m loop.cli status --iteration artifacts/my-iteration
 
 ## 提交包与实现边界
 
-`artifacts/coregeek-v0.2.tar.gz` 包含未修改的 `main3.py`、`pyproject.toml`、递归 `src/agent/**/*.py` 和MANIFEST。**不含run.sh**、实验室、Loop、对手、测试、日志或密钥。以平台提供的脚本调用入口；本地可解压后运行 `python3 main3.py PORT`。
+`artifacts/coregeek-v0.3.tar.gz` 包含未修改的 `main3.py`、`pyproject.toml`、递归 `src/agent/**/*.py` 和MANIFEST。**不含run.sh**、实验室、Loop、对手、测试、日志或密钥。以平台提供的脚本调用入口；本地可解压后运行 `python3 main3.py PORT`。
 
-生产服务不输出请求/答案正文，仅保留原入口的监听提示。公钥遥测、可验证SOP自动复用、长期经济工作计划、统一角色/机器人移动裁判、宝藏与官方平台适配尚未完成；这次重构不把这些设计条目记为已实现。
+当前按调测要求默认向 stdout 输出明文 NDJSON：新闻、任务正文、模型返回、执行结果、实际提交答案、解析原因、动作校验丢弃和夜间操纵站位。异步队列满时丢弃日志并计数；大字段截断长度见 `truncatedCharacters`。公钥遥测、可验证SOP自动复用、统一角色/机器人移动裁判、宝藏与官方平台适配尚未完成。
+
+```bash
+# 指定明文日志文件；入口不变
+CORE_GEEK_DEBUG_LOG=artifacts/debug.ndjson bash run.sh 8080
+# 关闭正文日志
+CORE_GEEK_DEBUG_LOG=off bash run.sh 8080
+# 汇总提交次数、解析原因与夜间操纵情况
+python3 tools/analyze_debug.py artifacts/debug.ndjson
+```
+
+防御布局根据基地横向位置镜像：敌方来袭侧先建墙，再建上下墙，背面中段留入口；三座武器放在内圈角落，先火箭炮。黄昏召回保持到次日，开拓者停止接新任务并回防。石头优先留作围墙，其他矿石按小批次及时出售；建设三塔后购买武器/围墙升级券和低血量药剂。
 
 参见 [总体设计](docs/design/01-总体架构与实现设计.md)、[实施分工](docs/design/02-实施阶段与模块分工.md)、[本轮实现报告](docs/design/03-v02实现与验证.md)。
+
+本次调测变更及验证见 [防御与任务日志修订](docs/design/04-防御与任务日志修订.md)。

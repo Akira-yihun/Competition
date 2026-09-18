@@ -16,7 +16,7 @@ def legal(rid, cmd, turn):
     points=[Pos.load(p) for p in targets]
     if any(not 0<=p.x<turn.width or not 0<=p.y<turn.height for p in points):
         return False
-    if action in ('move','build','collect','use') and len(points)!=1:
+    if action in ('move','build','collect') and len(points)!=1:
         return False
     if action=='attack':
         controller=next((r for r in turn.controllable() if str(r.unit_id)==cmd.get('controllerId')),None)
@@ -45,10 +45,14 @@ def legal(rid, cmd, turn):
             return False
         return unit.backpack.count(name)>=quantity if action=='sell' else unit.capacity is None or len(unit.backpack)+quantity<=unit.capacity
     if action=='use':
+        name=cmd.get('name')
+        if name=='Medicine':return name in unit.backpack and not points
+        if len(points)!=1:return False
         target=next((u for u in turn.ours if u.health>0 and points[0] in turn.footprint(u)),None)
         name=cmd.get('name')
         if name not in unit.backpack or target is None or min(distance(unit.pos,p) for p in turn.footprint(target))>1:
             return False
+        if name=='WallFixer':return target.kind=='wall'
         group='Station' if target.kind=='station' else 'Weapon' if target.kind in TOWER_TYPES else 'Wall'
         return target.level in (1,2) and name==f'{group}UpgradeVoucher{target.level}'
     if action=='acceptTask':
