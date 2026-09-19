@@ -9,9 +9,14 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import os
 import sys
 import traceback
 from pathlib import Path
+
+# The per-round journal writes to stdout by default so the competition platform
+# captures it; a local test run does not want 1300 rounds of raw JSON.
+os.environ.setdefault("DS_AGENT_LOG", "off")
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
@@ -50,7 +55,7 @@ def run_module(module) -> int:
 
 
 def main() -> int:
-    modules = sys.argv[1:] or ["test_contract", "test_agent"]
+    modules = sys.argv[1:] or ["test_contract", "test_agent", "test_v2"]
     status = 0
     for module_name in modules:
         try:

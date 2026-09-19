@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from . import combat
 from . import rules as R
 from .config import Config
-from .model import Observation, Pos, Unit, distance
+from .model import Observation, Pos, Unit, distance, footprint_distance
 from . import navigation
 from .navigation import distances_from, ordered_stands
 from .world import (
@@ -32,8 +32,8 @@ from .world import (
 )
 from .protocol import (
     accept_task, attack as attack_cmd, build as build_cmd, buy as buy_cmd,
-    collect, drop as drop_cmd, move as move_cmd, remove as remove_cmd,
-    sell as sell_cmd, submit_answer, use as use_cmd,
+    collect, move as move_cmd, sell as sell_cmd, submit_answer,
+    summon_treasure, use as use_cmd,
 )
 
 
@@ -49,6 +49,10 @@ class TurnPlan:
     reserved_steps: set[tuple[int, int]] = field(default_factory=set)
     gold_spent: int = 0
     build_attempt: tuple[int, Pos, str] | None = None
+    #: soft no-go cells for this turn (v2: the map's middle band after dark)
+    avoid: frozenset[Pos] = frozenset()
+    #: role ids allowed to cross ``avoid`` (the defender must reach its towers)
+    exempt: frozenset[int] = frozenset()
 
     def reserve(self, pos: Pos) -> bool:
         key = (pos.x, pos.y)
@@ -66,6 +70,11 @@ class TurnPlan:
         self.diagnostics.append(message)
         del self.diagnostics[:-64]
 
+    def avoid_for(self, actor: Unit) -> frozenset[Pos]:
+        if not self.avoid or actor.unit_id in self.exempt:
+            return frozenset()
+        return self.avoid
+
     def available_gold(self, obs: Observation) -> int:
         """Observed gold minus everything already committed this turn.
 
@@ -78,6 +87,30 @@ class TurnPlan:
 # ---------------------------------------------------------------------------
 # shared helpers
 # ---------------------------------------------------------------------------
+def _resolve_goal(world: WorldView, actor: Unit, goal: Pos,
+                  cfg: Config) -> Pos:
+    """Turn an unreachable target into a reachable one.
+
+    Mines, the vendor, the weapon shop and the task points are all *zones*, and
+    任务书 §4.1 lists zones as movement blockers: the character must stand
+    **next to** them.  v1 passed the zone cell straight to the pathfinder, which
+    rejects any goal inside ``obs.zones`` and returns no path -- so every
+    "walk to the vendor / weapon shop" instruction silently did nothing and the
+    workers never sold a single ore or bought a single upgrade.
+    """
+    obs = world.obs
+    if obs.buildable_terrain(goal) and goal not in world.blocked_cells():
+        return goal
+    stands = [n for n in goal.neighbours()
+              if obs.buildable_terrain(n) and n not in world.blocked_cells()]
+    if not stands:
+        return goal
+    field = distances_from(world, actor, (actor.pos,), cfg)
+    stands.sort(key=lambda p: (field.get(p, 10 ** 6), distance(actor.pos, p),
+                               p.x, p.y))
+    return stands[0]
+
+
 def _walk(world: WorldView, plan: TurnPlan, actor: Unit, goal: Pos,
           cfg: Config, *, exclude: frozenset[Pos] = frozenset()) -> Pos | None:
     """One step towards ``goal``, honouring cells already claimed this turn.
@@ -87,8 +120,16 @@ def _walk(world: WorldView, plan: TurnPlan, actor: Unit, goal: Pos,
     preference **from the same search** instead of paying for one full-grid
     search per alternative (the baseline did exactly that: ~2400 searches in one
     daytime turn, peaking near a second).
+
+    v2 adds the night-time soft no-go band (R3).  It is only ever *soft*: when
+    the restricted search finds nothing at all we retry unrestricted, because
+    standing still next to a robot is strictly worse than crossing the middle.
     """
-    path, field, _cost = navigation.search(world, actor, goal, cfg)
+    goal = _resolve_goal(world, actor, goal, cfg)
+    avoid = plan.avoid_for(actor)
+    path, field, _cost = navigation.search(world, actor, goal, cfg, avoid=avoid)
+    if not path and avoid:
+        path, field, _cost = navigation.search(world, actor, goal, cfg)
     if not path:
         return None
     step = _first_free_step(path, plan, exclude)
@@ -103,7 +144,8 @@ def _walk(world: WorldView, plan: TurnPlan, actor: Unit, goal: Pos,
         key=lambda cell: (field[cell], distance(cell, goal), cell.x, cell.y),
     )
     for alternative in ranked[:4]:
-        fallback, _f, _c = navigation.search(world, actor, alternative, cfg)
+        fallback, _f, _c = navigation.search(world, actor, alternative, cfg,
+                                             allow_robots=True)
         if not fallback:
             continue
         step = _first_free_step(fallback, plan, exclude)
@@ -141,35 +183,178 @@ def _stand_cells(world: WorldView, target: Pos,
 
 
 
-def _mine_step(world: WorldView, plan: TurnPlan, actor: Unit, cfg: Config,
-               kinds: tuple[str, ...]) -> bool:
-    """Collect from an adjacent mine, or step towards the best one."""
-    obs = world.obs
-    adjacent = [p for p in obs.mine_cells()
-                if distance(actor.pos, p) == 1
-                and (not kinds or obs.zones.get(p) in kinds)]
-    if adjacent:
-        adjacent.sort(key=lambda p: (obs.zones.get(p, ""), p.x, p.y))
-        plan.take(actor.unit_id, collect(adjacent[0]))
+def _price_table(world: WorldView) -> dict[str, int]:
+    """Vendor prices from the payload, falling back to the task-book baseline."""
+    prices = dict(R.BASE_MINERAL_PRICE)
+    for kind, price in (world.obs.vendor or {}).items():
+        if kind in R.MINE_KINDS and price > 0:
+            prices[kind] = price
+    return prices
+
+
+def _price_on(world: WorldView, state, kind: str, prices: dict[str, int]) -> float:
+    """Today's price for ``kind``: observed price scaled by the news calendar."""
+    base = float(prices.get(kind, R.BASE_MINERAL_PRICE.get(kind, 1)))
+    calendar = getattr(state, "price_calendar", None) if state is not None else None
+    if calendar is None:
+        return base
+    return base * calendar.multiplier(kind, world.obs.day_index)
+
+
+def _mineable_on(world: WorldView, state, kind: str) -> bool:
+    calendar = getattr(state, "price_calendar", None) if state is not None else None
+    if calendar is None:
         return True
-    if actor.backpack_full:
+    return calendar.mineable(kind, world.obs.day_index)
+
+
+def _locked_mine(world: WorldView, state, actor: Unit,
+                 kinds: tuple[str, ...]) -> Pos | None:
+    """The mine this worker committed to, if it is still there and usable.
+
+    R4: a mine survives 10 collections and only then respawns elsewhere, so the
+    target is worth keeping across the walk/collect/sell cycle.  The lock is
+    dropped the moment the ore cell disappears from ``zones``, changes type, or
+    becomes a place we refuse to stand at night.
+    """
+    if state is None or not getattr(state, "mine_targets", None):
+        return None
+    entry = state.mine_targets.get(actor.unit_id)
+    if not entry:
+        return None
+    pos = Pos(int(entry.get("x", -1)), int(entry.get("y", -1)))
+    kind = world.obs.zones.get(pos)
+    if kind is None or kind not in R.MINE_KINDS:
+        state.mine_targets.pop(actor.unit_id, None)
+        return None
+    if kinds and kind not in kinds:
+        return None
+    if world.night_now() and not world.safe_cell(pos):
+        return None
+    if entry.get("ore") != kind:
+        entry["ore"] = kind
+    return pos
+
+
+def _lock_mine(state, actor: Unit, mine: Pos, kind: str) -> None:
+    if state is None or not getattr(state, "mine_lock", True):
+        return
+    if getattr(state, "mine_targets", None) is None:
+        return
+    state.mine_targets[actor.unit_id] = {"x": mine.x, "y": mine.y, "ore": kind}
+
+
+def _heal_step(world: WorldView, plan: TurnPlan, actor: Unit) -> bool:
+    """Drink a held Medicine / patch a wall we are standing next to.
+
+    v1 *bought* these consumables and then never used them, so the gold was a
+    pure donation.  Both are free actions in the sense that they need no walk:
+    Medicine has no target, and WallFixer only applies to an adjacent wall.
+    """
+    if actor.unit_id in plan.commands:
         return False
-    mines = [p for p in obs.mine_cells() if not kinds or obs.zones.get(p) in kinds]
+    maximum = 200 if actor.kind == R.PIONEER else 220
+    if actor.health < maximum * 0.65 and actor.count(R.MEDICINE) >= 1:
+        plan.take(actor.unit_id, use_cmd(R.MEDICINE))
+        plan.note("use:Medicine")
+        return True
+    if actor.count(R.WALL_FIXER) >= 1:
+        for wall in sorted(world.obs.walls(), key=lambda w: (w.health, w.unit_id)):
+            top = R.BUILDING_HP[R.WALL][min(max(wall.level, 1), 3) - 1]
+            if wall.health >= top or distance(actor.pos, wall.pos) > 1:
+                continue
+            plan.take(actor.unit_id, use_cmd(R.WALL_FIXER, wall.pos))
+            plan.note("use:WallFixer")
+            return True
+    return False
+
+
+def choose_mine(world: WorldView, state, actor: Unit, cfg: Config,
+                kinds: tuple[str, ...],
+                taken: frozenset[Pos] = frozenset()) -> tuple[Pos, Pos] | None:
+    """Pick a mine and a stand cell, balancing price, distance and sale trip (R4).
+
+    ``score = price * yield / (1 + walk_to_mine + walk_mine_to_vendor)``
+
+    which is the gold-per-round rate of the whole loop, not just of the walk.
+    A locked mine always wins if it is still valid: switching targets every round
+    is what made v1's collection "比较混乱".
+    """
+    obs = world.obs
+    locked = _locked_mine(world, state, actor, kinds)
+    if locked is not None:
+        stands = _stand_cells(world, locked, actor)
+        if stands:
+            field = distances_from(world, actor, (actor.pos,), cfg)
+            reachable = [(field[s], s) for s in stands if s in field]
+            if reachable:
+                reachable.sort(key=lambda item: (item[0], item[1].x, item[1].y))
+                return locked, reachable[0][1]
+        return locked, locked          # adjacent collect handled by the caller
+
+    mines = [p for p in obs.mine_cells()
+             if (not kinds or obs.zones.get(p) in kinds)
+             and _mineable_on(world, state, obs.zones.get(p, ""))]
     if not mines:
-        return False
+        return None
+    if world.night_now():
+        mines = [p for p in mines if world.safe_cell(p)]
+        if not mines:
+            return None
+    prices = _price_table(world)
+    vendor = obs.first_zone(R.ZONE_VENDOR)
     field = distances_from(world, actor, (actor.pos,), cfg)
-    best: tuple[int, Pos, Pos] | None = None
+
+    best: tuple[float, int, Pos, Pos] | None = None
     for mine in mines:
+        kind = obs.zones.get(mine, "")
+        price = _price_on(world, state, kind, prices)
+        to_vendor = distance(mine, vendor) if vendor is not None else 24
         for stand in _stand_cells(world, mine, actor):
             reach = field.get(stand)
             if reach is None:
                 continue
-            if best is None or (reach, mine.x, mine.y) < (best[0], best[2].x,
-                                                          best[2].y):
-                best = (reach, stand, mine)
+            loop = 1.0 + reach + cfg.mine_sell_weight * to_vendor
+            score = price * cfg.mine_yield / loop
+            if mine in taken:
+                score *= 0.35             # two workers on one 10-use mine waste yield
+            key = (score, -reach, mine, stand)
+            if best is None or key > best:
+                best = key
     if best is None:
+        return None
+    _score, _reach, mine, stand = best
+    _lock_mine(state, actor, mine, obs.zones.get(mine, ""))
+    return mine, stand
+
+
+def _mine_step(world: WorldView, plan: TurnPlan, actor: Unit, cfg: Config,
+               kinds: tuple[str, ...], state=None,
+               taken: frozenset[Pos] = frozenset()) -> bool:
+    """Collect from the committed mine, or take one step towards it."""
+    obs = world.obs
+    adjacent = [p for p in obs.mine_cells()
+                if distance(actor.pos, p) == 1
+                and (not kinds or obs.zones.get(p) in kinds)
+                and _mineable_on(world, state, obs.zones.get(p, ""))]
+    if adjacent and not actor.backpack_full:
+        locked = _locked_mine(world, state, actor, kinds)
+        if locked in adjacent:
+            adjacent = [locked]
+        else:
+            adjacent.sort(key=lambda p: (obs.zones.get(p, ""), p.x, p.y))
+        _lock_mine(state, actor, adjacent[0], obs.zones.get(adjacent[0], ""))
+        plan.take(actor.unit_id, collect(adjacent[0]))
+        return True
+    if actor.backpack_full:
         return False
-    reach, stand, mine = best
+    pick = choose_mine(world, state, actor, cfg, kinds, taken)
+    if pick is None:
+        return False
+    mine, stand = pick
+    if distance(actor.pos, mine) == 1:
+        plan.take(actor.unit_id, collect(mine))
+        return True
     if stand == actor.pos:
         plan.take(actor.unit_id, collect(mine))
         return True
@@ -243,13 +428,38 @@ def assign_controllers(world: WorldView, available: tuple[Unit, ...],
     return assignment
 
 
-def plan_night(world: WorldView, plan: TurnPlan, cfg: Config,
+def plan_night(world: WorldView, plan: TurnPlan, cfg: Config, state=None,
                *, pioneers_excluded: frozenset[int] = frozenset()) -> None:
+    """Night turn: everything is defence, plus the held station voucher (R5).
+
+    A single role may operate only one weapon per round (接口文档 §2.2), so the
+    layout puts all three towers next to one shared hub and this function puts a
+    *different* body on each ready tower.  v1 assigned towers by nearest-role and
+    then fired before moving, which in practice fired one tower per round.
+    """
     obs = world.obs
     robots = tuple(world.threat_robots())
     ledger = combat.DamageLedger()
+    base = world.station_cells()
+    front = world.front_direction()
 
-    fighters = tuple(u for u in obs.fighters() if u.unit_id not in pioneers_excluded)
+    # R3: after dark nobody wanders into the middle of the map.  Characters that
+    # are already there (and the defender, who may have to cross) are exempt, so
+    # the band can never trap anyone; see ``_walk``'s fallback as well.
+    band = world.middle_band()
+    defender, _miner = assign_duties(world, state)
+    exempt = {u.unit_id for u in obs.fighters() if u.pos in band}
+    if defender is not None:
+        exempt.add(defender.unit_id)
+    plan.avoid = band
+    plan.exempt = frozenset(exempt)
+
+    # The station voucher is a full heal; spend it before the wave finishes the
+    # job, and keep the carrier within one cell of the base once it looks likely.
+    _station_voucher_step(world, plan, cfg, state)
+
+    fighters = tuple(u for u in obs.fighters()
+                     if u.unit_id not in pioneers_excluded)
     towers = obs.towers()
     if not towers:
         _shelter(world, plan, fighters, cfg)
@@ -267,7 +477,7 @@ def plan_night(world: WorldView, plan: TurnPlan, cfg: Config,
             continue
         if combat.tower_cooldown(tower, obs.round_no, world.cooling) > 0:
             continue
-        aims = combat.aim_for(tower, robots, ledger, cfg)
+        aims = combat.aim_for(tower, robots, ledger, cfg, base, front)
         if not aims:
             continue
         command = attack_cmd(controller.unit_id, aims)
@@ -280,20 +490,16 @@ def plan_night(world: WorldView, plan: TurnPlan, cfg: Config,
                 break
 
     # then move everyone else into position
+    hub = world.operator_hub()
     for tower in towers:
         controller = assignment.get(tower.unit_id)
         if controller is None:
             continue
         if controller.unit_id in claimed_roles or controller.unit_id in plan.commands:
             continue
-        stands = ordered_stands(world, controller, (tower.pos,), cfg=cfg)
-        stands = [s for s in stands if distance(s, tower.pos) <= 1]
-        if not stands:
-            stands = [s for s in _stand_cells(world, tower.pos, controller)]
-        if not stands:
-            continue
-        goal = stands[0]
-        if controller.pos == goal:
+        goal = _operator_stand(world, controller, tower, hub, cfg)
+        if goal is None or controller.pos == goal:
+            claimed_roles.add(controller.unit_id)
             continue
         step = _walk(world, plan, controller, goal, cfg)
         if step is not None:
@@ -309,8 +515,143 @@ def plan_night(world: WorldView, plan: TurnPlan, cfg: Config,
     for actor in leftover:
         if _use_consumable(world, plan, actor, robots, cfg):
             continue
+        if _heal_step(world, plan, actor):
+            continue
         spare.append(actor)
     _shelter(world, plan, tuple(spare), cfg)
+
+
+def _operator_stand(world: WorldView, controller: Unit, tower: Unit,
+                    hub: Pos | None, cfg: Config) -> Pos | None:
+    """Where this controller should stand: the shared hub when it can reach it."""
+    if hub is not None and distance(hub, tower.pos) <= 1:
+        if controller.pos == hub:
+            return None
+        return hub
+    stands = ordered_stands(world, controller, (tower.pos,), cfg=cfg)
+    stands = [s for s in stands if distance(s, tower.pos) <= 1]
+    if not stands:
+        stands = [s for s in _stand_cells(world, tower.pos, controller)]
+    return stands[0] if stands else None
+
+
+def _station_voucher_step(world: WorldView, plan: TurnPlan, cfg: Config,
+                          state) -> bool:
+    """R5: hold the station upgrade voucher, use it only when it saves the base.
+
+    The upgrade sets the station to full HP, so spending it early throws the heal
+    away.  Use it when
+      * health < ``station_emergency_hp`` (100), or
+      * the robots already in range deal lethal damage within
+        ``station_predict_rounds`` rounds (attack power × rounds ≥ health),
+    and until then keep the carrier loitering next to the base once health drops
+    below ``station_standby_ratio`` of maximum, so the trip is never the reason
+    the base falls.
+    """
+    if state is None:
+        return False
+    station = world.obs.station()
+    if station is None or station.level >= 3:
+        return False
+    voucher = R.VOUCHER_STATION_1 if station.level == 1 else R.VOUCHER_STATION_2
+    holder = _voucher_holder(world, state, voucher)
+    if holder is None:
+        return False
+    maximum = R.BUILDING_HP[R.STATION][min(station.level, 3) - 1]
+    incoming = _incoming_damage(world, tuple(world.threat_robots()), cfg)
+    urgent = (station.health < cfg.station_emergency_hp
+              or incoming * cfg.station_predict_rounds >= station.health)
+    near = _near_base(world, holder.pos)
+    if urgent:
+        if near:
+            target = _station_target(world, holder)
+            plan.take(holder.unit_id, use_cmd(voucher, target))
+            plan.note(f"station_voucher@{world.obs.round_no}")
+            return True
+        step = _walk(world, plan, holder, _base_stand(world, holder), cfg)
+        if step is not None:
+            plan.take(holder.unit_id, move_cmd(step))
+            return True
+        return False
+    if station.health < maximum * cfg.station_standby_ratio and not near:
+        step = _walk(world, plan, holder, _base_stand(world, holder), cfg)
+        if step is not None:
+            plan.take(holder.unit_id, move_cmd(step))
+            return True
+    return False
+
+
+def _voucher_holder(world: WorldView, state, voucher: str) -> Unit | None:
+    """The role that carries ``voucher`` (remembered so it does not wander off)."""
+    remembered = (state.station_voucher or {}).get(voucher)
+    for unit in world.obs.fighters():
+        if unit.count(voucher) >= 1 and (remembered is None
+                                         or unit.unit_id == remembered):
+            return unit
+    for unit in world.obs.fighters():
+        if unit.count(voucher) >= 1:
+            state.station_voucher = {voucher: unit.unit_id}
+            return unit
+    return None
+
+
+def _incoming_damage(world: WorldView, robots: tuple, cfg: Config) -> int:
+    """Per-round damage the robots in range of the base can currently apply."""
+    base = world.station_cells()
+    if not base:
+        return 0
+    total = 0
+    for robot in robots:
+        if footprint_distance(robot.pos, base) > 5:
+            continue
+        stats = R.ROBOT_STATS.get(robot.kind, R.ROBOT_STATS[R.DEFAULT_ROBOT])
+        total += int(stats["attack"])
+    return total
+
+
+def _near_base(world: WorldView, pos: Pos) -> bool:
+    base = world.station_cells()
+    return bool(base) and footprint_distance(pos, base) <= 1
+
+
+def _station_target(world: WorldView, actor: Unit) -> Pos:
+    """The base cell to name in ``use``: the footprint cell nearest the actor.
+
+    任务书 §4.6.3 requires the voucher to be used 在目标建筑周围一格内, and the
+    strictest reading is that the *named* cell must be within reach.  Sending the
+    nearest of the four footprint cells (rather than blindly the reported anchor)
+    keeps that true for an operator standing behind the base.
+    """
+    base = world.station_cells()
+    if not base:
+        return world.station_anchor() or actor.pos
+    return min(base, key=lambda c: (distance(actor.pos, c), -world.front_ness(c),
+                                    c.x, c.y))
+
+
+def _base_stand(world: WorldView, actor: Unit) -> Pos:
+    """A free cell within one step of a base cell, preferring the rear.
+
+    Robots arrive from the front, so the rear cell keeps the voucher carrier out
+    of the fight while still being able to use the voucher (R5).
+    """
+    base = world.station_cells()
+    if not base:
+        return actor.pos
+    stands: list[Pos] = []
+    seen: set[Pos] = set()
+    for cell in base:
+        for nb in cell.neighbours():
+            if nb in seen or not world.obs.buildable_terrain(nb):
+                continue
+            seen.add(nb)
+            if nb in world.blocked_cells():
+                continue
+            stands.append(nb)
+    if not stands:
+        return actor.pos
+    stands.sort(key=lambda p: (-world.front_ness(p), distance(actor.pos, p), p.x))
+    return stands[0]
 
 
 def _use_consumable(world: WorldView, plan: TurnPlan, actor: Unit,
@@ -319,10 +660,11 @@ def _use_consumable(world: WorldView, plan: TurnPlan, actor: Unit,
     obs = world.obs
     if actor.unit_id in plan.commands:
         return False
-    aim = combat.bomb_cluster(obs, robots, cfg)
+    base = world.station_cells()
+    aim = combat.bomb_cluster(obs, robots, cfg, base)
     item = R.BOMB
     if aim is None:
-        aim = combat.dizzy_target(obs, robots, cfg)
+        aim = combat.dizzy_target(obs, robots, cfg, base)
         item = R.DIZZY_WEAPON
     if aim is None:
         return False
@@ -347,21 +689,48 @@ def _use_consumable(world: WorldView, plan: TurnPlan, actor: Unit,
 
 def _shelter(world: WorldView, plan: TurnPlan, actors: tuple[Unit, ...],
              cfg: Config) -> None:
-    """Idle roles fall back to the base interior; never stand in the open."""
+    """Idle roles wait at the shared tower hub, or on a safe edge cell (R3).
+
+    v1 pushed them *inside* the base footprint, which is the worst place to be:
+    a robot that reaches the base then finds a 220 HP worker standing closer than
+    the 1500 HP station and kills it, costing a whole next-day respawn.
+    """
     obs = world.obs
-    cells = world.station_cells() or ()
-    if not cells:
-        return
+    hub = world.operator_hub()
+    towers = obs.towers()
+    if hub is not None and towers and distance(hub, towers[0].pos) <= 1:
+        goal = hub
+        goal_ok = True
+    else:
+        goal = _safe_rally_cell(world, actors[0].pos if actors else None)
+        goal_ok = goal is not None
     for actor in actors:
         if actor.unit_id in plan.commands:
             continue
-        stands = [c for c in cells if c != actor.pos]
-        if not stands:
+        if not goal_ok or goal is None:
             continue
-        stands.sort(key=lambda c: (distance(actor.pos, c), c.x, c.y))
-        step = _walk(world, plan, actor, stands[0], cfg)
+        if actor.pos == goal:
+            continue
+        step = _walk(world, plan, actor, goal, cfg)
         if step is not None:
             plan.take(actor.unit_id, move_cmd(step))
+
+
+def _safe_rally_cell(world: WorldView, near: Pos | None) -> Pos | None:
+    """Nearest *safe* cell to our base, i.e. an edge cell away from the wave.
+
+    R3 says to leave the middle of the map; it does not say to run to the far
+    corner.  Ranking by distance to the base first keeps the evacuated character
+    close enough to walk back to a tower the moment it is needed.
+    """
+    cells = [c for c in world.safe_cells()
+             if world.obs.buildable_terrain(c) and c not in world.blocked_cells()]
+    if not cells:
+        return None
+    anchor = world.station_anchor() or (near or Pos(0, 0))
+    cells.sort(key=lambda p: (distance(p, anchor), world.side_depth(p),
+                              distance(p, near) if near else 0, p.x, p.y))
+    return cells[0]
 
 
 # ---------------------------------------------------------------------------
@@ -374,7 +743,7 @@ def _inventory(actor: Unit, item: str) -> int:
 
 
 def plan_economy(world: WorldView, plan: TurnPlan, actor: Unit, cfg: Config,
-                 *, need_stone: bool) -> None:
+                 *, need_stone: bool, state=None) -> None:
     """One worker action: sell, buy, upgrade, mine, or head for a vendor."""
     obs = world.obs
     if actor.unit_id in plan.commands:
@@ -383,20 +752,26 @@ def plan_economy(world: WorldView, plan: TurnPlan, actor: Unit, cfg: Config,
     vendor = obs.first_zone(R.ZONE_VENDOR)
     shop = obs.first_zone(R.ZONE_WEAPON_SHOP)
 
+    # --- emergency station voucher outranks every other errand (R5) -------
+    if _station_voucher_step(world, plan, cfg, state):
+        return
+
     # --- sell what we carry once the batch is worth the trip -------------
-    for kind in (R.ZONE_COPPER, R.ZONE_IRON, R.ZONE_STONE):
-        held = _inventory(actor, kind)
-        if kind == R.ZONE_STONE and need_stone:
-            held = max(0, held - cfg.stone_target)
-        if held >= cfg.sell_batch_min and vendor is not None:
-            if distance(actor.pos, vendor) <= 1:
-                plan.take(actor.unit_id, sell_cmd(kind, held))
-                return
+    cargo = _sellable_kinds(world, state, actor, cfg, need_stone)
+    if cargo and vendor is not None:
+        kind, held = cargo[0]
+        # The vendor sits at the map centre in every observed map: at night a
+        # sale trip is not worth dying for (R3), so only sell if already there.
+        if distance(actor.pos, vendor) <= 1:
+            plan.take(actor.unit_id, sell_cmd(kind, held))
+            plan.note(f"sell:{kind}x{held}")
+            return
+        if not world.night_now():
             if _move_towards(world, plan, actor, vendor, cfg):
                 return
 
     # --- purchases and upgrades ------------------------------------------
-    action = _purchase_plan(world, plan, actor, cfg)
+    action = _purchase_plan(world, plan, actor, cfg, state)
     if action is not None:
         if action[0] == "walk":
             _move_towards(world, plan, actor, action[1], cfg)
@@ -405,54 +780,178 @@ def plan_economy(world: WorldView, plan: TurnPlan, actor: Unit, cfg: Config,
         plan.gold_spent += action[2]
         return
 
+    # --- spend the stone we are carrying on the next wall cell -------------
+    if need_stone and actor.count(R.WALL_MATERIAL) >= 1:
+        if plan_construction(world, plan, actor, cfg):
+            return
+
     # --- mine -------------------------------------------------------------
-    kinds = tuple(cfg.mineral_priority)
-    if need_stone and R.ZONE_STONE in obs.zones.values():
-        kinds = (R.ZONE_STONE, *[k for k in cfg.mineral_priority if k != R.ZONE_STONE])
-    if _mine_step(world, plan, actor, cfg, kinds):
+    kinds = _mining_kinds(world, state, cfg, need_stone)
+    taken = _other_locks(world, state, actor)
+    if _mine_step(world, plan, actor, cfg, kinds, state, taken):
         return
 
-    # --- nothing to do: rally to the next build site / base --------------
-    anchor = world.station_anchor()
-    if anchor is not None:
-        _move_towards(world, plan, actor, anchor, cfg)
+    # --- nothing to do: hold the safe rally point / the tower hub ---------
+    goal = world.operator_hub() or world.station_anchor()
+    if goal is not None:
+        _move_towards(world, plan, actor, goal, cfg)
 
 
-def _purchase_plan(world: WorldView, plan: TurnPlan, actor: Unit, cfg: Config):
-    """Return ``("walk", pos)``, ``("cmd", command, gold)`` or ``None``."""
+def _mining_kinds(world: WorldView, state, cfg: Config,
+                  need_stone: bool) -> tuple[str, ...]:
+    """Ore kinds worth mining right now, best first."""
+    order = list(cfg.mineral_priority)
+    if need_stone and R.ZONE_STONE in order:
+        order.remove(R.ZONE_STONE)
+        order.insert(0, R.ZONE_STONE)
+    available = {k for k in order if any(
+        world.obs.zones.get(p) == k for p in world.obs.mine_cells())}
+    live = tuple(k for k in order
+                 if k in available and _mineable_on(world, state, k))
+    return live or tuple(order)
+
+
+def _other_locks(world: WorldView, state, actor: Unit) -> frozenset[Pos]:
+    """Cells already claimed by the other worker, to avoid double-teaming a mine."""
+    if state is None or not getattr(state, "mine_targets", None):
+        return frozenset()
+    other = [Pos(int(e["x"]), int(e["y"]))
+             for rid, e in state.mine_targets.items() if rid != actor.unit_id]
+    return frozenset(other)
+
+
+def _sellable_kinds(world: WorldView, state, actor: Unit, cfg: Config,
+                    need_stone: bool) -> list[tuple[str, int]]:
+    """``[(ore, count)]`` worth a trip to the vendor, richest first.
+
+    Two rules keep the worker mining instead of walking (R4):
+
+    * a batch must be worth the journey -- ``count * price`` has to cover
+      ``sell_trip_weight`` gold per cell of travel to the vendor -- unless the
+      backpack is full;
+    * stone the wall plan still needs is kept back, and ore the news says is
+      about to rise in price is held.
+    """
+    obs = world.obs
+    prices = _price_table(world)
+    calendar = getattr(state, "price_calendar", None) if state is not None else None
+    vendor = obs.first_zone(R.ZONE_VENDOR)
+    travel = distance(actor.pos, vendor) if vendor is not None else 20
+    out: list[tuple[str, int]] = []
+    for kind in (R.ZONE_COPPER, R.ZONE_IRON, R.ZONE_STONE):
+        held = actor.count(kind)
+        if held <= 0:
+            continue
+        if kind == R.ZONE_STONE and need_stone:
+            held = max(0, held - cfg.stone_target)
+        # A count floor alone is not enough: 5 stone and 5 copper both pass a
+        # ">= 5" test but only one of them pays for the walk.
+        worth_it = (held * _price_on(world, state, kind, prices)
+                    >= cfg.sell_trip_weight * max(1, travel))
+        if not (actor.backpack_full or (held >= cfg.sell_batch_min and worth_it)):
+            continue
+        if calendar is not None and held < actor.capacity:
+            today = _price_on(world, state, kind, prices)
+            tomorrow = prices.get(kind, 1) * calendar.multiplier(
+                kind, obs.day_index + 1)
+            if tomorrow > today * 1.2:
+                continue                  # the rumour says wait: sell dearer later
+        out.append((kind, held))
+    out.sort(key=lambda item: (-_price_on(world, state, item[0], prices)
+                               * item[1], item[0]))
+    return out
+
+
+def _upgrade_order(world: WorldView, tower: Unit) -> tuple:
+    """R2: upgrade the weapon closest to the front line first.
+
+    ``front_ness`` is the projection of the tower onto the base→map-interior
+    axis, so with the planned layout the tower nearest the robots is upgraded
+    before the two behind it.  Distance from the nearest live robot is the
+    tie-break, then level and id for determinism.
+    """
+    robots = [r for r in world.obs.robots if r.alive]
+    nearest = min((distance(tower.pos, r.pos) for r in robots), default=99)
+    return (-world.front_ness(tower.pos), nearest, tower.level, tower.unit_id)
+
+
+def _purchase_plan(world: WorldView, plan: TurnPlan, actor: Unit, cfg: Config,
+                   state=None):
+    """Return ``("walk", pos)``, ``("cmd", command, gold)`` or ``None``.
+
+    Priority (R5): 前期尽量先购买武器升级券和基地升级券, and the station voucher
+    is *bought and held* -- it is a full heal, not a stat bump, so it is only
+    spent by :func:`_station_voucher_step` when the base is about to fall.
+    """
     obs = world.obs
     shop = obs.first_zone(R.ZONE_WEAPON_SHOP)
     if shop is None:
         return None
     spendable = max(0, plan.available_gold(obs) - cfg.gold_reserve)
 
-    towers = obs.towers()
+    towers = sorted(obs.towers(), key=lambda t: _upgrade_order(world, t))
     station = obs.station()
-    # 1) station upgrade: +1500 HP and a full heal, worth 15 survival points/100g
-    if station is not None and station.level < 3:
-        voucher = (R.VOUCHER_STATION_1 if station.level == 1
-                   else R.VOUCHER_STATION_2)
-        if spendable >= R.SHOP_PRICE[voucher]:
-            return _ensure_voucher(world, plan, actor, voucher, station.pos, shop)
-    # 2) weapon upgrades: range + damage, the strongest gold->power channel
+
+    # 1) weapon upgrades: range + damage, the strongest gold->power channel and
+    #    the thing that actually keeps the base alive on nights 1-3.
     for tower in towers:
         if tower.level >= 3:
             continue
-        voucher = (R.VOUCHER_WEAPON_1 if tower.level == 1 else R.VOUCHER_WEAPON_2)
+        voucher = (R.VOUCHER_WEAPON_1 if tower.level == 1
+                   else R.VOUCHER_WEAPON_2)
         if spendable >= R.SHOP_PRICE[voucher]:
             return _ensure_voucher(world, plan, actor, voucher, tower.pos, shop)
+
+    # 2) one station voucher, bought early and kept in the backpack.
+    if cfg.station_voucher_reserve and station is not None and station.level < 3:
+        voucher = (R.VOUCHER_STATION_1 if station.level == 1
+                   else R.VOUCHER_STATION_2)
+        if not any(u.count(voucher) >= 1 for u in obs.fighters()):
+            if spendable >= R.SHOP_PRICE[voucher]:
+                return _ensure_voucher(world, plan, actor, voucher, station.pos,
+                                       shop, use_now=False)
+
     # 3) emergency consumables
     if station is not None and station.health < R.BUILDING_HP[R.STATION][0] * 0.5:
         walls = [w for w in obs.walls() if w.health < R.BUILDING_HP[R.WALL][0]]
         if walls and spendable >= R.SHOP_PRICE[R.WALL_FIXER]:
             return _ensure_voucher(world, plan, actor, R.WALL_FIXER, walls[0].pos, shop)
-    if actor.health < 100 and spendable >= R.SHOP_PRICE[R.MEDICINE]:
+    if actor.health < 132 and spendable >= R.SHOP_PRICE[R.MEDICINE]:
         return _ensure_voucher(world, plan, actor, R.MEDICINE, actor.pos, shop)
+
+    # 4) leftover gold: another weapon level before any wall polish.  Sorting by
+    #    price alone let cheap 20-gold wall vouchers drain the bank while the
+    #    rocket battery stayed at level 2 (R2: 升级优先升级靠近机器人一侧的武器).
+    candidates = _spare_upgrades(world, station)
+    candidates.sort(key=lambda item: (item[0], item[1], item[2].y, item[2].x))
+    for price, voucher, target in candidates:
+        if spendable >= price:
+            return _ensure_voucher(world, plan, actor, voucher, target, shop)
     return None
 
 
+def _spare_upgrades(world: WorldView,
+                    station: Unit | None) -> list[tuple[int, str, Pos]]:
+    """``(price, voucher, target)`` still worth buying, weapons ranked first."""
+    weapons: list[tuple[int, str, Pos]] = []
+    walls: list[tuple[int, str, Pos]] = []
+    for tower in world.obs.towers():
+        if tower.level == 1:
+            weapons.append((0, R.VOUCHER_WEAPON_1, tower.pos))
+        elif tower.level == 2:
+            weapons.append((0, R.VOUCHER_WEAPON_2, tower.pos))
+    for wall in world.obs.walls():
+        if wall.level == 1:
+            walls.append((1, R.VOUCHER_WALL_1, wall.pos))
+        elif wall.level == 2:
+            walls.append((1, R.VOUCHER_WALL_2, wall.pos))
+    priced = [(R.SHOP_PRICE[v], v, p) for _rank, v, p in weapons + walls]
+    order = {v: rank for rank, v, _p in weapons + walls}
+    return sorted(priced, key=lambda item: (order.get(item[1], 9), item[0]))
+
+
 def _ensure_voucher(world: WorldView, plan: TurnPlan, actor: Unit, item: str,
-                    target: Pos, shop: Pos):
+                    target: Pos, shop: Pos, *, use_now: bool = True):
     """Buy it if missing, then walk into range and use it."""
     obs = world.obs
     if actor.count(item) < 1:
@@ -461,6 +960,10 @@ def _ensure_voucher(world: WorldView, plan: TurnPlan, actor: Unit, item: str,
         if distance(actor.pos, shop) <= 1:
             return ("cmd", buy_cmd(item, 1), R.SHOP_PRICE.get(item, 0))
         return ("walk", shop)
+    if not use_now:
+        return None                      # hold it: _station_voucher_step decides
+    if item in (R.VOUCHER_STATION_1, R.VOUCHER_STATION_2):
+        target = _station_target(world, actor)
     if distance(actor.pos, target) <= 1:
         return ("cmd", use_cmd(item, target), 0)
     return ("walk", target)
@@ -471,7 +974,13 @@ def _ensure_voucher(world: WorldView, plan: TurnPlan, actor: Unit, item: str,
 # ---------------------------------------------------------------------------
 def plan_construction(world: WorldView, plan: TurnPlan, actor: Unit,
                       cfg: Config) -> bool:
-    """Build the next tower or wall; returns True when an action was issued."""
+    """Build the next tower or wall; returns True when an action was issued.
+
+    Towers come first and are chosen from ``cfg.tower_loadout`` by *slot index*
+    rather than by "which kind is missing": the slot also decides which of the
+    three planned cells is used, so the loadout stays in the intended order even
+    after a tower is destroyed and rebuilt.
+    """
     obs = world.obs
     if actor.unit_id in plan.commands:
         return False
@@ -483,7 +992,7 @@ def plan_construction(world: WorldView, plan: TurnPlan, actor: Unit,
     # weapons at 3 globally.
     pending = _pending_towers(world, towers)
     if len(towers) + pending < R.MAX_TOWERS and obs.gold >= R.WEAPON_BUILD_COST:
-        kind = _next_tower_kind(towers)
+        kind = _next_tower_kind(towers, pending, cfg)
         if _build_at(world, plan, actor, kind, cfg):
             return True
 
@@ -497,13 +1006,24 @@ def plan_construction(world: WorldView, plan: TurnPlan, actor: Unit,
     return False
 
 
-def _next_tower_kind(towers: tuple[Unit, ...]) -> str:
-    """Diversify: gatling for cheap multi-target, railgun for reach, rocket for splash."""
-    have = {t.kind for t in towers}
-    for kind in R.TOWER_TYPES:
-        if kind not in have:
-            return kind
-    return R.GATLING
+def _next_tower_kind(towers: tuple[Unit, ...], pending: int,
+                     cfg: Config) -> str:
+    """The loadout slot for the next tower.
+
+    任务书 §4.5.1 allows any mix of the three weapons; the default loadout is
+    three rockets, because at level 1 a rocket already reaches 10 cells and
+    splashes eight neighbours while a gatling reaches 3 for the same 10 damage.
+    """
+    loadout = tuple(cfg.tower_loadout) or R.TOWER_TYPES
+    index = len(towers) + max(0, pending)
+    if index >= len(loadout):
+        have = {t.kind for t in towers}
+        for kind in R.TOWER_TYPES:
+            if kind not in have:
+                return kind
+        index = len(loadout) - 1
+    kind = loadout[max(0, min(index, len(loadout) - 1))]
+    return kind if kind in R.TOWER_TYPES else R.ROCKET
 
 
 def _pending_towers(world: WorldView, towers: tuple[Unit, ...]) -> int:
@@ -608,10 +1128,35 @@ def plan_day(world: WorldView, plan: TurnPlan, cfg: Config, state,
     Daylight is the only time that can be *invested*: 2100 actions against a
     rigid demand of roughly 28-35 %.  Night has an 1800-action budget and zero
     slack, so everything non-combat belongs here.
-    """
-    obs = world.obs
 
+    v2 changes the order of business at the start of a match: three towers in the
+    first three rounds beat a stone hoard, because night 1 arrives at round 71
+    whether or not the wall exists.
+    """
     plan_construction_then_economy(world, plan, cfg, state, machine)
+
+
+def assign_duties(world: WorldView, state) -> tuple[Unit | None, Unit | None]:
+    """``(defender, miner)`` -- stable worker duties (v2).
+
+    接口文档 §1.3.1 fixes worker1/worker2 ids for the whole match, so a duty
+    assigned once survives death and respawn.  The defender owns the towers and
+    the station voucher; the miner ranges further for ore.
+    """
+    workers = sorted(world.obs.workers(), key=lambda u: u.unit_id)
+    if not workers:
+        return None, None
+    if state is None or not hasattr(state, "duties"):
+        return workers[0], (workers[1] if len(workers) > 1 else None)
+    remembered = state.duties.get("defender")
+    defender = next((w for w in workers if w.unit_id == remembered), None)
+    if defender is None:
+        defender = workers[0]
+        state.duties["defender"] = defender.unit_id
+    miner = next((w for w in workers if w.unit_id != defender.unit_id), None)
+    if miner is not None:
+        state.duties["miner"] = miner.unit_id
+    return defender, miner
 
 
 def plan_construction_then_economy(world: WorldView, plan: TurnPlan,
@@ -619,37 +1164,131 @@ def plan_construction_then_economy(world: WorldView, plan: TurnPlan,
     obs = world.obs
     pioneer = obs.pioneer()
     workers = obs.workers()
+    defender, _miner = assign_duties(world, state)
 
     # --- pioneer: tasks are the only route to score_1 ---------------------
     if pioneer is not None:
-        task_plan = machine.plan(obs, pioneer)
-        if task_plan.get("action"):
-            plan.take(pioneer.unit_id, _task_command(task_plan))
-        elif task_plan.get("prompt"):
-            plan.prompt = task_plan["prompt"]
-        elif task_plan.get("goto") is not None:
-            _move_towards(world, plan, pioneer, task_plan["goto"], cfg)
-        elif machine.in_task:
-            pass                     # stay on the task point: leaving ends it
-        else:
-            _move_towards(world, plan, pioneer, _idle_pioneer_goal(world, cfg), cfg)
+        _pioneer_turn(world, plan, cfg, state, machine, pioneer)
 
     # --- workers: build first, then mine/sell/upgrade ---------------------
     need_stone = any(
         not any(w.alive and w.pos == c for w in obs.walls())
         for c in world.wall_plan(cfg)
     )
+    towers = obs.towers()
+    pending = _pending_towers(world, towers)
+    opening = (cfg.towers_before_stone
+               and len(towers) + pending < R.MAX_TOWERS)
     for worker in workers:
         if worker.unit_id in plan.commands:
             continue
-        if need_stone and worker.count(R.WALL_MATERIAL) < cfg.stone_target:
-            if _mine_step(world, plan, worker, cfg,
-                          (R.ZONE_STONE, *[k for k in cfg.mineral_priority
-                                           if k != R.ZONE_STONE])):
-                continue
-        if plan_construction(world, plan, worker, cfg):
+        # R5 first: a held station voucher that is due, or a purchase the worker
+        # can complete *this round from where it stands*, outranks every errand.
+        # Walking detours for shopping stay at the bottom of the list.
+        if _station_voucher_step(world, plan, cfg, state):
             continue
-        plan_economy(world, plan, worker, cfg, need_stone=need_stone)
+        if _heal_step(world, plan, worker):
+            continue
+        if opening:
+            # R2/opening: the first 75 gold is three towers; a stone trip now
+            # would delay the first night's only source of damage.
+            if _pending_towers(world, obs.towers()) + len(obs.towers()) >= R.MAX_TOWERS:
+                opening = False
+            elif plan_construction(world, plan, worker, cfg):
+                continue
+        if _immediate_purchase(world, plan, worker, cfg, state):
+            continue
+        # Everything else (sell -> shop trip -> wall -> mine) is sequenced inside
+        # plan_economy.  v1 ran wall construction *before* economy, so a worker
+        # with a stone in its pack built walls forever and never walked to the
+        # weapon shop: three towers stayed level 1 with 1200 gold in the bank.
+        plan_economy(world, plan, worker, cfg, need_stone=need_stone,
+                     state=state)
+
+
+def _immediate_purchase(world: WorldView, plan: TurnPlan, actor: Unit,
+                        cfg: Config, state) -> bool:
+    """Complete a purchase/upgrade this round without leaving the spot."""
+    action = _purchase_plan(world, plan, actor, cfg, state)
+    if action is None or action[0] != "cmd":
+        return False
+    plan.take(actor.unit_id, action[1])
+    plan.gold_spent += action[2]
+    return True
+
+
+def _pioneer_turn(world: WorldView, plan: TurnPlan, cfg: Config, state,
+                  machine, pioneer: Unit) -> None:
+    """Tasks while it is safe and profitable, the tower hub when it is not.
+
+    R3 is explicit: 夜晚来临后…做任务和采集矿石都应该去地图两侧…以免被机器人打死
+    （这样要到第二天第20回合才能复活，得不偿失）.  So once caution applies and the
+    pioneer is not standing somewhere safe, the task is dropped (leaving the
+    1-cell ring ends it, keeping whatever partial credit was already submitted)
+    and the pioneer becomes a third tower operator for the night.
+    """
+    obs = world.obs
+    if machine.in_task and world.night_now() and not world.safe_cell(pioneer.pos):
+        plan.note("abandon_task_for_night")
+        goal = _safe_rally_cell(world, pioneer.pos) or world.operator_hub()
+        if goal is not None:
+            _move_towards(world, plan, pioneer, goal, cfg)
+        return
+
+    # 民间传闻 宝藏: only ever attempted once the location *and* the exact
+    # sacrifice are both known, because a legal-but-wrong sacrifice still
+    # consumes the items (任务书 §4.6.3 note).  No item purchases are made on
+    # speculation -- that would trade certain gold for an inferred altar.
+    if not machine.in_task and _summon_step(world, plan, cfg, state, pioneer):
+        return
+
+    accept_ok = (not world.night_now()) or world.safe_cell(pioneer.pos)
+    if not accept_ok and not machine.in_task:
+        goal = _safe_rally_cell(world, pioneer.pos) or world.operator_hub()
+        if goal is not None:
+            _move_towards(world, plan, pioneer, goal, cfg)
+        return
+
+    task_plan = machine.plan(obs, pioneer)
+    if task_plan.get("action"):
+        plan.take(pioneer.unit_id, _task_command(task_plan))
+    elif task_plan.get("exec"):
+        # 接口文档 §2.1: executeCmd is the sandbox channel, legal only while a
+        # task is live -- which is exactly when the machine emits it.
+        plan.execute_cmd = str(task_plan["exec"])[:12000]
+    elif task_plan.get("prompt"):
+        plan.prompt = task_plan["prompt"]
+    elif task_plan.get("goto") is not None:
+        _move_towards(world, plan, pioneer, task_plan["goto"], cfg)
+    elif machine.in_task:
+        pass                         # stay on the task point: leaving ends it
+    else:
+        _move_towards(world, plan, pioneer, _idle_pioneer_goal(world, cfg), cfg)
+
+
+def _summon_step(world: WorldView, plan: TurnPlan, cfg: Config, state,
+                 pioneer: Unit) -> bool:
+    """走向/开启祭坛宝藏 when the rumour hypothesis has converged.
+
+    Deliberately conservative: ``should_summon`` demands a located altar, an open
+    day window and every sacrifice item already in the backpack, so this can
+    never fritter away gold on a guess.
+    """
+    hypothesis = getattr(state, "treasure", None) if state is not None else None
+    if hypothesis is None or hypothesis.pos is None or hypothesis.confidence < 0.8:
+        return False
+    if not hypothesis.items:
+        return False
+    target = should_summon(world, hypothesis, pioneer)
+    if target is not None:
+        plan.take(pioneer.unit_id, summon_treasure(target, hypothesis.items))
+        plan.note("summon_treasure")
+        return True
+    if distance(pioneer.pos, hypothesis.pos) <= 1:
+        return False                     # nothing to sacrifice yet
+    if world.night_now() or not world.safe_cell(hypothesis.pos):
+        return False
+    return _move_towards(world, plan, pioneer, hypothesis.pos, cfg)
 
 
 def _task_command(task_plan: dict) -> dict:
@@ -663,16 +1302,19 @@ def _task_command(task_plan: dict) -> dict:
 
 def _idle_pioneer_goal(world: WorldView, cfg: Config) -> Pos:
     """With no task available, hold station near the base (not across the map)."""
+    hub = world.operator_hub()
     anchor = world.station_anchor()
     if anchor is None:
         point = world.obs.first_zone(R.ZONE_VENDOR)
         return point if point is not None else Pos(0, 0)
+    if world.night_now() and hub is not None:
+        return hub
     task = world.nearest_task_point(anchor)
     if task is not None:
         stands = sorted(task.stands(), key=lambda p: (p.x, p.y))
         if stands:
             return stands[0]
-    return anchor
+    return hub or anchor
 
 
 def consume_feedback(world: WorldView, state) -> None:

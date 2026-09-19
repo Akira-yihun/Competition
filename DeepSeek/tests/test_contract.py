@@ -234,27 +234,32 @@ class TestGuard:
             ok, why = guard.validate(command, controller, obs, world)
             assert not ok and why.startswith("attack:want_3"), (count, why)
 
-    def test_duplicate_aim_cells_are_rejected(self):
-        """Duplicate aim cells rely on undefined semantics, so they are refused.
+    def test_duplicate_aim_cells(self):
+        """Rocket impacts may overlap; every other weapon must aim distinctly.
 
-        任务书 only says overlapping *missiles* stack damage; it never says two
-        aim cells may coincide, and the two reference implementations disagree.
+        任务书 §4.5.4.4 says 多枚导弹落点重叠时伤害叠加, so stacking a level-2/3
+        rocket on one armoured robot is legal and often correct (R2).  A gatling
+        bullet has no stacking rule, so its aim cells stay distinct.
         """
         obs = parse(sample_payload())
         old_tower = obs.towers()[0]
-        tower = Unit(unit_id=old_tower.unit_id, pos=old_tower.pos,
-                     kind="rocket", health=1000, level=2, cooldown=0,
-                     attack_power=20, attack_range=R.RANGE_SENTINEL,
-                     capacity=0, backpack=())
-        controller = Unit(unit_id=10010, pos=_adjacent(tower), kind="worker",
+        aim = Pos(old_tower.pos.x + 1, old_tower.pos.y)
+        controller = Unit(unit_id=10010, pos=_adjacent(old_tower), kind="worker",
                           health=220, level=1, capacity=100, backpack=())
-        obs = _with_roles(obs, tower, controller)
-        world = WorldView(obs, DEFAULT)
-        aim = Pos(tower.pos.x + 1, tower.pos.y)
-        command = protocol.attack(controller.unit_id, (aim, aim))
-        command["__towerId"] = tower.unit_id
-        ok, why = guard.validate(command, controller, obs, world)
-        assert not ok and why == "attack:duplicate_targets"
+        for kind, expect_ok in (("rocket", True), ("gatling", False)):
+            tower = Unit(unit_id=old_tower.unit_id, pos=old_tower.pos,
+                         kind=kind, health=1000, level=2, cooldown=0,
+                         attack_power=20, attack_range=R.RANGE_SENTINEL,
+                         capacity=0, backpack=())
+            local = _with_roles(obs, tower, controller)
+            world = WorldView(local, DEFAULT)
+            command = protocol.attack(controller.unit_id, (aim, aim))
+            command["__towerId"] = tower.unit_id
+            ok, why = guard.validate(command, controller, local, world)
+            if expect_ok:
+                assert ok, why
+            else:
+                assert not ok and why == "attack:duplicate_targets", why
 
     def test_gatling_cone_is_checked_pairwise(self):
         origin = Pos(10, 10)

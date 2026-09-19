@@ -28,36 +28,51 @@ class Config:
 
     # --- 建造 -------------------------------------------------------------
     build_fail_limit: int = 2         # 同一格连续几次未生效后判非法
-    build_probe_per_turn: int = 1     # 每回合最多几个角色做建址探测
     wall_ring_enabled: bool = True
     wall_ring_limit: int = 24         # 围墙计划的最大格数
-    wall_keep_entrance: bool = True   # 留一个气闸口供角色出入
     stone_target: int = 8             # 计划囤积的石头数
+    #: 塔的建造顺序 (v2)。三座火箭：射程 10/15/全图 + 八格溅射；
+    #: 一级加特林/电磁射程只有 3/6，首夜火力差距明显。
+    tower_loadout: tuple = ("rocket", "rocket", "rocket")
+    towers_before_stone: bool = True  # 先建满三塔，再考虑围墙/囤石
 
     # --- 经济 -------------------------------------------------------------
     sell_batch_min: int = 5           # 触发批量售卖的最小同类矿石数
     gold_reserve: int = 0
-    upgrade_station_first: bool = False
     mineral_priority: tuple = ("copper", "iron", "stone")
+    mine_lock: bool = True            # 跨回合锁定矿点，采完再换 (R4)
+    mine_yield: int = 10              # 任务书 §4.1: 每矿采集 10 次后消失
+    mine_sell_weight: float = 1.0     # 评分里"矿→小贩"距离的权重
+    sell_trip_weight: float = 1.5     # 一批矿石至少值"每走一格 N 金币"才去卖
+
+    # --- 采购 (R5) --------------------------------------------------------
+    station_voucher_reserve: bool = True   # 基地券买来先存着，不急用
+    station_emergency_hp: int = 100        # 基地血量低于此值必须用券
+    station_standby_ratio: float = 0.6     # 低于该血量比时防守工人回基地待命
+    station_predict_rounds: int = 2        # 预测未来几回合的攻击伤害
 
     # --- 防守 -------------------------------------------------------------
     return_margin: int = 2            # 返防提前量（回合）
-    emergency_hp_ratio: float = 0.35  # 基地血量低于该比例触发应急
     idle_defend_radius: int = 1       # 角色距塔多少格内视为可开火站位
+
+    # --- 夜间避险 (R3) ----------------------------------------------------
+    night_margin: int = 8             # 天黑前多少回合开始谨慎
+    night_side_divisor: int = 3       # 安全区宽度 = width // 该值
+    night_side_min: int = 2           # 安全区最小格数（贴边）
+    night_robot_radius: int = 4       # 机器人周围多少格视为危险
+    night_hold_tasks: bool = False    # 任务态开拓者夜间是否留在任务点
 
     # --- 战斗 -------------------------------------------------------------
     aim_k: int = 6                    # 选靶时纳入枚举的高价值目标数
-    bomb_min_cluster: int = 3         # 3x3 内机器人数达到该值才考虑 Bomb
+    bomb_min_cluster: int = 3         # 3x3 机器人数达到该值才考虑 Bomb
     boss_dizzy_hp_ratio: float = 0.6  # BOSS/大型低于该血量比时考虑眩晕
-    fire_empty_cells: bool = True     # 无可击杀目标时是否向合法空点开火
-    rocket_focus_fire: bool = True    # 火箭多弹是否优先叠打
+    rocket_rear_bonus: float = 12.0   # 火箭落点向内侧后移一格的加分 (R2)
+    rocket_rear_min_cluster: int = 3  # 后排成群的门槛
+    rocket_urgent_radius: int = 3     # 最近敌人进入基地该距离时改为直击
 
     # --- 任务 -------------------------------------------------------------
-    task_leave_margin: int = 2        # 天黑前提前多少回合停接新任务
     task_llm_max_per_instance: int = 4
-    task_exec_timeout_hint: float = 10.0
     skill_min_success: int = 1
-    pioneer_help_defend: bool = False  # 任务态开拓者是否参与操炮（默认否）
 
     # --- LLM --------------------------------------------------------------
     llm_calls_per_day: int = 3        # 接口文档 1.7
@@ -65,8 +80,12 @@ class Config:
 
     # --- 杂项 -------------------------------------------------------------
     max_commands: int = 16            # 角色数上限，防止异常报文导致响应膨胀
-    telemetry_ring: int = 256
-    config_note: str = "demo_ds-v1"
+    config_note: str = "demo_ds-v2"
+
+    # -- 派生量 ------------------------------------------------------------
+    def night_side_limit(self, width: int) -> int:
+        """Width of the safe band along each map edge (R3, 地图两侧)."""
+        return max(self.night_side_min, width // max(1, self.night_side_divisor))
 
 
 DEFAULT = Config()

@@ -269,7 +269,11 @@ def _check_attack(command: Mapping[str, Any], targets: list[dict], actor: Unit,
             return False, "attack:out_of_range"
         if tower.kind != R.ROCKET and pos == tower.pos:
             return False, "attack:self_cell"
-    if len({(p.x, p.y) for p in positions}) != len(positions):
+    # Rocket impacts may legally overlap (任务书 §4.5.4.4: 多枚导弹落点重叠时伤害
+    # 叠加), and stacking all missiles on one armoured robot is often the right
+    # play.  Every other weapon must aim at distinct cells.
+    if tower.kind != R.ROCKET and \
+            len({(p.x, p.y) for p in positions}) != len(positions):
         return False, "attack:duplicate_targets"
     if tower.kind == R.GATLING and len(positions) > 1 and not cone_ok(tower.pos, positions):
         return False, "attack:cone_violated"

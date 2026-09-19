@@ -11,6 +11,7 @@ Soft metrics (regression only, never evidence about the official game):
 from __future__ import annotations
 
 import json
+import os
 import statistics
 import sys
 import time
@@ -19,6 +20,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT))
+
+# The per-round journal is on by default for the competition platform; a local
+# 1300-round batch does not want it.  ``DS_AGENT_LOG=<path>`` still works.
+os.environ.setdefault("DS_AGENT_LOG", "off")
 
 from agent.brain import make_handler           # noqa: E402
 from agent.config import Config               # noqa: E402
@@ -81,12 +86,22 @@ def run(seed: int = 1, rounds: int = 260, verbose: bool = False,
 
 
 def main() -> int:
-    seeds = [int(a) for a in sys.argv[1:] if a.isdigit()] or [1, 2, 3]
+    argv = list(sys.argv[1:])
+    rounds = 1300
+    if "--rounds" in argv:
+        index = argv.index("--rounds")
+        try:
+            rounds = int(argv[index + 1])
+        except (IndexError, ValueError):
+            print("--rounds needs an integer")
+            return 2
+        del argv[index:index + 2]
+    seeds = [int(a) for a in argv if a.isdigit()] or [1, 2, 3]
     failures = 0
     report = []
     for seed in seeds:
         started = time.perf_counter()
-        summary = run(seed=seed)
+        summary = run(seed=seed, rounds=rounds)
         elapsed = time.perf_counter() - started
         report.append(summary)
         line = [f"seed={seed} rounds={summary['rounds_played']} ({elapsed:.1f}s)"]

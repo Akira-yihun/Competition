@@ -48,6 +48,8 @@ class TaskInstance:
     submit_count: int = 0
     best_answer: str = ""
     pending_answer: str = ""
+    #: a sandbox command the model asked us to run (``executeCmd``)
+    pending_exec: str = ""
     evidence: list[str] = field(default_factory=list)
     timeout_rounds: int = 0
     score_reward: int = 0
@@ -114,6 +116,12 @@ class TaskMachine:
 
     def _adopt(self, obs: Observation) -> None:
         point = self._point_for(obs)
+        if point is None:
+            # A task is active but this payload carries no usable task point
+            # (for example every point is cooling down).  Staying in IDLE keeps
+            # the turn alive; the next payload re-adopts.
+            self._note("adopt_without_point")
+            return
         self.instance = TaskInstance(
             point_key=self._key(point),
             start_round=obs.round_no,
@@ -129,15 +137,19 @@ class TaskMachine:
             return                       # stale response, refuse to use it
         raw = obs.llm_response
         instance.evidence.append(f"llm@{obs.round_no}:{raw[:200]}")
+        # An explicit command marker wins over the answer parser: 自进化类 tasks
+        # are solved *through* the sandbox, and the raw parser would otherwise
+        # happily submit "CMD: ..." as the answer text.
+        command = self._extract_exec(raw)
+        if command:
+            if not instance.pending_exec:
+                instance.pending_exec = command
+                instance.evidence.append("llm_requested_exec")
+            return
         skill = self.skills.lookup(instance.text)
         parser = skill.parser if skill else "raw"
         answer = extract_answer(raw, parser)
         if not answer:
-            # the model may have answered with a command to run instead
-            command = self._extract_exec(raw)
-            if command and not instance.pending_answer:
-                instance.pending_answer = ""
-                instance.evidence.append("llm_requested_exec")
             return
         if len(answer) > len(instance.pending_answer):
             instance.pending_answer = answer
@@ -247,6 +259,18 @@ class TaskMachine:
             self._note("submit")
             return out
 
+        # 2b) the model asked for a sandbox command and we hold no answer yet:
+        #     run it.  接口文档 §2.1 allows executeCmd only while a task is live,
+        #     and a timeout/error is explicitly *not* a team 异常.
+        if instance.pending_exec and not self.exec_inflight:
+            out["exec"] = instance.pending_exec
+            instance.pending_exec = ""
+            self.exec_inflight = True
+            self.exec_sent_on = obs.round_no
+            instance.exec_round = obs.round_no
+            self._note("exec")
+            return out
+
         # 3) otherwise gather evidence, respecting the per-instance cap
         if self.llm_calls_this_instance >= self.cfg.task_llm_max_per_instance:
             if instance.pending_answer:
@@ -291,8 +315,13 @@ class TaskMachine:
             return None
         free = [t for t in candidates
                 if self.cooldown_until.get(self._key(t), 0) <= obs.round_no]
-        pool = free or candidates
-        return min(pool, key=lambda t: (self._key(t),))
+        if not free:
+            # Every point is still cooling down.  v2 used to fall back to the
+            # cooling list here, which made the pioneer re-issue a rejected
+            # acceptTask every single round (186 wasted rounds in one local
+            # match).  Idling near the base is strictly better.
+            return None
+        return min(free, key=lambda t: (self._key(t),))
 
     def _point_for(self, obs: Observation) -> PlayerTask | None:
         instance = self.instance
@@ -325,12 +354,32 @@ class TaskMachine:
 
     @staticmethod
     def _extract_exec(response: str) -> str:
-        """Pull a single executable command out of a model response."""
+        """Pull a single executable command out of a model response.
+
+        Accepts an explicit ``CMD:``/``RUN:``/``EXEC:`` line or a fenced code
+        block that holds exactly one non-empty line -- anything looser risks
+        shipping prose to a shell, and a malformed command burns a whole turn.
+        """
+        if not isinstance(response, str) or not response:
+            return ""
         for line in response.splitlines():
             stripped = line.strip()
             for prefix in ("CMD:", "RUN:", "EXEC:"):
                 if stripped.upper().startswith(prefix):
                     return stripped[len(prefix):].strip()[:1500]
+        fence: list[str] = []
+        inside = False
+        for line in response.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("```"):
+                if inside:
+                    break
+                inside = True
+                continue
+            if inside and stripped:
+                fence.append(stripped)
+        if len(fence) == 1:
+            return fence[0].lstrip("$ ").strip()[:1500]
         return ""
 
 
@@ -339,12 +388,15 @@ def _approach_cell(point: PlayerTask, from_pos: Pos) -> Pos | None:
 
     A task point is an obstacle, so the navigation goal must be a *neighbouring*
     cell, not the point itself; standing anywhere within one cell counts
-    (任务书 §4.4: 开拓者在己方任务点周围一格内触发).
+    (任务书 §4.4: 开拓者在己方任务点周围一格内触发).  Cells next to the reported
+    anchor are preferred, because that is the cell the judge measures against.
     """
     stands = point.stands()
     if not stands:
         return None
-    return min(stands, key=lambda p: (distance(from_pos, p), p.x, p.y))
+    anchor = point.anchor
+    return min(stands, key=lambda p: (distance(p, anchor) > 1,
+                                      distance(from_pos, p), p.x, p.y))
 
 
 def parse_cmd_result(result: str) -> dict:

@@ -115,20 +115,166 @@ class WorldView:
         return station.pos if station is not None else None
 
     def station_cells(self) -> tuple[Pos, ...]:
-        """Documented footprint first, other reading appended.
-
-        Only the upper-left reading is consistent with the sample's three
-        towers; the lower-left reading is kept as a secondary candidate so that
-        blocking stays conservative (we never path *into* our own base).
-        """
+        """The base's 2x2 footprint (接口文档 1.3.1: pos is the top-left corner)."""
         anchor = self.station_anchor()
         if anchor is None:
             return ()
-        variants = station_footprints(anchor)
-        primary = tuple(p for p in variants[0] if self.obs.in_bounds(p))
-        extra = tuple(p for p in variants[1]
-                      if self.obs.in_bounds(p) and p not in primary)
-        return primary + extra
+        return tuple(p for p in station_footprints(anchor)[0]
+                     if self.obs.in_bounds(p))
+
+    # -- orientation -------------------------------------------------------
+    def front_direction(self) -> tuple[int, int]:
+        """Unit step from the base towards the map interior.
+
+        R2 fact (user-confirmed and matching every observed wave): robots always
+        attack from the side of the base that faces the map interior.  The base
+        sits in a corner region, so the interior direction is the sign of
+        ``map_centre - base`` on each axis; x is the dominant axis (bases are
+        left/right), y is the secondary one.
+        """
+        anchor = self.station_anchor()
+        if anchor is None:
+            return (0, 0)
+        dx = 1 if anchor.x < self.obs.width / 2 else -1
+        dy = 1 if anchor.y < self.obs.height / 2 else -1
+        return (dx, dy)
+
+    def front_ness(self, pos: Pos) -> int:
+        """How far ``pos`` lies towards the front (bigger = closer to the enemy).
+
+        Weighted 2:1 in favour of x so that "the tower facing the robots" is
+        decided by the dominant axis, with y breaking ties.
+        """
+        anchor = self.station_anchor()
+        if anchor is None:
+            return 0
+        dx, dy = self.front_direction()
+        return 2 * (pos.x - anchor.x) * dx + (pos.y - anchor.y) * dy
+
+    def rear_direction(self) -> tuple[int, int]:
+        dx, dy = self.front_direction()
+        return (-dx, -dy)
+
+    def operator_hub(self) -> Pos | None:
+        """One cell that touches all three planned towers, on the rear side.
+
+        A single role may operate only one weapon per round (接口文档 §2.2), so
+        three towers need three operators -- and a shared hub means any
+        surviving role can take over any tower.  It is also the *rear* cell, so
+        operators are never the closest unit for an attacking robot.
+        """
+        anchor = self.station_anchor()
+        if anchor is None:
+            return None
+        dx, _dy = self.front_direction()
+        hub = Pos(anchor.x - 2, anchor.y - 1) if dx > 0 else Pos(anchor.x + 3, anchor.y)
+        return hub if self.obs.in_bounds(hub) else None
+
+    def tower_sites(self) -> tuple[Pos, ...]:
+        """The three planned tower cells, in build order (front-most first).
+
+        Chosen as *footprint distance 1 AND hub distance 1*: that is exactly the
+        set of legal weapon cells a single operator can serve from one cell, and
+        it is what makes the hub layout work.  Building "any ring-1 cell" instead
+        (v2's first attempt) scattered the three towers along the base's south
+        face, where no shared hub exists and the operator spends the night
+        walking between them.
+        """
+        anchor = self.station_anchor()
+        hub = self.operator_hub()
+        if anchor is None or hub is None:
+            return ()
+        footprint = self.station_cells()
+        cells = [c for c in hub.ring(1)
+                 if self.obs.in_bounds(c)
+                 and footprint_distance(c, footprint) == 1
+                 and self.obs.buildable_terrain(c)
+                 and c not in self.blocked_cells()]
+        # Front-most first: that tower gets the first upgrade voucher (R2).
+        cells.sort(key=lambda p: (-self.front_ness(p), p.x, p.y))
+        return tuple(cells[:3])
+
+    def wall_sites(self) -> tuple[Pos, ...]:
+        """U-shaped ring at footprint distance 2, open at the rear for our own use.
+
+        Front column first (that is where the robots arrive), then the two
+        lateral rows from front to rear.  The rear column is deliberately left
+        open so the operator hub always stays reachable.
+        """
+        anchor = self.station_anchor()
+        if anchor is None or not self.cfg.wall_ring_enabled:
+            return ()
+        dx, _dy = self.front_direction()
+        x, y = anchor.x, anchor.y
+        # The anchor is always the *minimum-x* cell of the 2x2 footprint, so the
+        # ring-2 columns are [x-2, x+3] for either orientation; only which of the
+        # two extreme columns counts as "front" flips.
+        columns = range(x - 2, x + 4)
+        front = x + 3 if dx > 0 else x - 2
+        cells: list[Pos] = [Pos(front, yy) for yy in range(y - 3, y + 3)]
+        cells.sort(key=lambda p: (abs(p.y - (y - 0.5)), p.y))
+        rows = (y - 3, y + 2)
+        lateral = [Pos(xx, yy) for yy in rows for xx in columns if xx != front]
+        lateral.sort(key=lambda p: (abs(p.x - front), p.y))
+        planned = cells + lateral
+        hub = self.operator_hub()
+        out = [p for p in planned
+               if p != hub and self.obs.buildable_terrain(p)]
+        return tuple(out[:self.cfg.wall_ring_limit])
+
+    # -- safety ------------------------------------------------------------
+    def side_depth(self, pos: Pos) -> int:
+        return min(pos.x, self.obs.width - 1 - pos.x)
+
+    def safe_cell(self, pos: Pos) -> bool:
+        """R3: close to a map edge and not inside a robot's strike radius.
+
+        The middle of the map is where the wave walks through, so at night a
+        character caught there trades its life for a whole next-day respawn.
+        """
+        if self.side_depth(pos) > self.cfg.night_side_limit(self.obs.width):
+            return False
+        for robot in self.obs.robots:
+            if robot.alive and distance(robot.pos, pos) <= self.cfg.night_robot_radius:
+                return False
+        return True
+
+    def safe_cells(self) -> tuple[Pos, ...]:
+        return tuple(Pos(x, y)
+                     for x in range(self.obs.width)
+                     for y in range(self.obs.height)
+                     if self.safe_cell(Pos(x, y)))
+
+    def middle_band(self) -> frozenset[Pos]:
+        """Cells a night-time character should not route through (soft block)."""
+        limit = self.cfg.night_side_limit(self.obs.width)
+        return frozenset(
+            Pos(x, y)
+            for x in range(self.obs.width)
+            for y in range(self.obs.height)
+            if self.side_depth(Pos(x, y)) > limit
+        )
+
+    def danger_cells(self) -> frozenset[Pos]:
+        """Cells within the strike radius of a live robot."""
+        cells: set[Pos] = set()
+        for robot in self.obs.robots:
+            if not robot.alive:
+                continue
+            for dx in range(-self.cfg.night_robot_radius,
+                            self.cfg.night_robot_radius + 1):
+                for dy in range(-self.cfg.night_robot_radius,
+                                self.cfg.night_robot_radius + 1):
+                    cell = Pos(robot.pos.x + dx, robot.pos.y + dy)
+                    if self.obs.in_bounds(cell):
+                        cells.add(cell)
+        return frozenset(cells)
+
+    def night_now(self) -> bool:
+        """True once caution should apply: after dark, or just before it."""
+        if not self.obs.is_day:
+            return True
+        return self.obs.phase_round >= R.DAY_ROUNDS - self.cfg.night_margin
 
     def blocked_cells(self) -> frozenset[Pos]:
         """Buildings (both sides) and our own units.  Cached per WorldView."""
@@ -160,7 +306,14 @@ class WorldView:
 
     # -- build sites -------------------------------------------------------
     def build_candidates(self, kind: str) -> tuple[Pos, ...]:
-        """Ordered candidate cells for building ``kind`` ('wall' or a tower)."""
+        """Ordered candidate cells for building ``kind`` ('wall' or a tower).
+
+        Order is *planned layout first, geometry second*: the three rear tower
+        cells / the U-shaped wall ring are what the strategy actually wants, and
+        the ring fallback keeps the agent functional on a map whose build region
+        differs from 任务书 §4.1's 8x8 diagram (the judge's own accept/reject
+        feedback is what ultimately confirms a cell -- see ``SiteKnowledge``).
+        """
         anchor = self.station_anchor()
         if anchor is None:
             return ()
@@ -169,17 +322,26 @@ class WorldView:
         blocked = self.blocked_cells()
         robot_cells = {r.pos for r in self.obs.robots if r.alive}
 
-        rings = (1, 2) if kind != R.WALL else (2, 3)
+        planned = list(self.tower_sites() if kind != R.WALL else self.wall_sites())
+        # Fallback: the rest of the *same* ring.  任务书 §4.1's diagram is explicit
+        # that weapons live at footprint distance 1 and walls at distance 2, so a
+        # wider ring is never offered -- building there would be an illegal
+        # command (a wasted action at best, an 异常 at worst), and the judge's
+        # accept/reject feedback in ``SiteKnowledge`` is what confirms a cell.
+        wanted = 1 if kind != R.WALL else 2
+        for cell in self._footprint_ring(footprint, wanted):
+            if cell not in planned:
+                planned.append(cell)
+
         candidates: list[Pos] = []
-        for radius in rings:
-            for cell in self._ring(anchor, radius):
-                if not self.obs.buildable_terrain(cell):
-                    continue
-                if cell in blocked or cell in robot_cells:
-                    continue
-                if self.knowledge.is_illegal(cell, name):
-                    continue
-                candidates.append(cell)
+        for cell in planned:
+            if not self.obs.buildable_terrain(cell):
+                continue
+            if cell in blocked or cell in robot_cells:
+                continue
+            if self.knowledge.is_illegal(cell, name):
+                continue
+            candidates.append(cell)
 
         def rank(cell: Pos) -> tuple:
             status = self.knowledge.status_of(cell, name)
@@ -190,31 +352,43 @@ class WorldView:
                     hint = 0 if status == LEGAL else 1
                 elif status != LEGAL:
                     hint = 2
-            # towers hug the base, walls form the outer ring
-            return (hint, footprint_distance(cell, footprint), cell.x, cell.y)
+            if kind == R.WALL:
+                # Front first: that is the side the wave arrives from.
+                order = self.front_ness(cell)
+                return (hint, -order, footprint_distance(cell, footprint),
+                        cell.x, cell.y)
+            return (hint, 0, footprint_distance(cell, footprint), cell.x, cell.y)
 
         candidates.sort(key=rank)
         return tuple(candidates)
+
+    def _footprint_ring(self, footprint: tuple[Pos, ...],
+                        radius: int) -> tuple[Pos, ...]:
+        """Cells at exactly ``radius`` Chebyshev distance from a footprint."""
+        if not footprint:
+            return ()
+        seen: list[Pos] = []
+        known: set[Pos] = set()
+        for cell in footprint:
+            for ring_cell in cell.ring(radius):
+                if ring_cell in known or not self.obs.in_bounds(ring_cell):
+                    continue
+                known.add(ring_cell)
+                if footprint_distance(ring_cell, footprint) == radius:
+                    seen.append(ring_cell)
+        seen.sort(key=lambda p: (p.x, p.y))
+        return tuple(seen)
 
     def _ring(self, anchor: Pos, radius: int) -> tuple[Pos, ...]:
         return anchor.ring(radius)
 
     def wall_plan(self, cfg: Config = DEFAULT) -> tuple[Pos, ...]:
-        """Cells that should eventually hold a wall (outer ring, one gate)."""
-        anchor = self.station_anchor()
-        if anchor is None or not cfg.wall_ring_enabled:
-            return ()
-        footprint = self.station_cells()
-        cells = [p for p in self._ring(anchor, 2) if self.obs.buildable_terrain(p)]
-        cells.sort(key=lambda p: (footprint_distance(p, footprint), p.x, p.y))
-        cells = cells[:cfg.wall_ring_limit]
-        if cfg.wall_keep_entrance and cells:
-            # leave one gate on the side pointing at the map interior so our
-            # own characters are never sealed in
-            gate = min(cells, key=lambda p: (abs(p.x - self.obs.width / 2)
-                                             + abs(p.y - self.obs.height / 2)))
-            cells = [c for c in cells if c != gate]
-        return tuple(cells)
+        """Cells that should eventually hold a wall (footprint ring 2, rear open).
+
+        Superseded by :meth:`wall_sites`; kept as the documented entry point so
+        older call sites and tests keep working.
+        """
+        return self.wall_sites()
 
     # -- task points -------------------------------------------------------
     def my_task_points(self) -> tuple[PlayerTask, ...]:

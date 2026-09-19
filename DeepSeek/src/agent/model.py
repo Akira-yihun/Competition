@@ -138,18 +138,28 @@ def footprint_distance(pos: Pos, cells: Iterable[Pos]) -> int:
 
 
 def station_footprints(anchor: Pos) -> tuple[tuple[Pos, ...], ...]:
-    """Candidate 2x2 footprints for a station reported at ``anchor``.
+    """The base's 2x2 footprint, from the anchor the payload reports.
 
-    接口文档 1.3.1 says the station pos is the **top-left** corner of its 2x2
-    footprint, but the sample request is not consistent with that (or with any
-    other single anchor).  We therefore keep both readings: the documented one
-    and the bottom-left one used by the pre-existing implementations.  Callers
-    union them so we never walk *into* our own base under either reading.
+    接口文档 1.3.1: the station ``pos`` is the **top-left** corner of its 2x2
+    footprint.  With y growing upwards that is (min x, max y), so the four cells
+    are ``anchor``, ``anchor+(1,0)``, ``anchor+(0,-1)``, ``anchor+(1,-1)``.
+
+    This is now the *only* reading, and it is the one the real sample confirms:
+    in ``docs/request.txt`` the three towers of the challenger sit at
+    (9,24)/(10,25)/(9,25) around a station reported at (10,24), which are exactly
+    the ring-1 cells of this footprint -- the old "opposite corner" fallback
+    would have placed the rocket *inside* the base.  Keeping both readings also
+    invented a phantom blocked row that could veto a legal build or step.
+
+    The tuple-of-tuples shape is kept so existing unpacking call sites keep
+    working.
     """
-    return (
-        (anchor, anchor.step(1, 0), anchor.step(0, -1), anchor.step(1, -1)),
-        (anchor, anchor.step(1, 0), anchor.step(0, 1), anchor.step(1, 1)),
-    )
+    return ((
+        anchor,
+        anchor.step(1, 0),
+        anchor.step(0, -1),
+        anchor.step(1, -1),
+    ),)
 
 
 # ---------------------------------------------------------------------------
@@ -305,6 +315,10 @@ class PlayerTask:
     valid: bool = False
     timeout_rounds: int = 0
     cold_down_reported: int = 0
+    #: the position the judge itself reports in ``playerTasks[].taskPosition``.
+    #: Task point 2 spans two cells, so the clustered ``cells`` anchor can differ
+    #: from the judge's own anchor; the reported one wins for acceptance tests.
+    reported: Pos | None = None
 
     @property
     def team(self) -> str:
@@ -323,7 +337,7 @@ class PlayerTask:
 
     @property
     def anchor(self) -> Pos:
-        return self.cells[0]
+        return self.reported or self.cells[0]
 
     def stands(self) -> tuple[Pos, ...]:
         """Every cell a pioneer may stand on to reach this task point."""
@@ -337,8 +351,15 @@ class PlayerTask:
         return tuple(out)
 
     def accepts(self, pos: Pos) -> bool:
-        """任务书 4.4: 开拓者须在任务点周围一格内."""
-        return any(distance(pos, cell) <= 1 for cell in self.cells)
+        """任务书 §4.4: 开拓者须在任务点周围一格内.
+
+        Measured against the *reported* anchor, which is the cell the judge
+        demonstrably uses: standing next to the other half of a two-cell point is
+        within the letter of §4.6.2 ("处于任一格") but was rejected by every local
+        simulator, so the strict reading is the safe one -- and it is always
+        reachable, because the anchor has free neighbours.
+        """
+        return distance(pos, self.anchor) <= 1
 
 
 def cluster_task_points(entries: list[tuple[Pos, str]]) -> list[PlayerTask]:
@@ -393,6 +414,7 @@ def merge_task_state(tasks: list[PlayerTask], rows: Any) -> list[PlayerTask]:
             valid=as_bool(best.get("isValid"), False),
             timeout_rounds=max(0, as_int(best.get("timeoutRounds"), 0)),
             cold_down_reported=max(0, as_int(best.get("coldDownRounds"), 0)),
+            reported=rpos,
         ))
     return merged
 

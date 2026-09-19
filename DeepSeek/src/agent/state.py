@@ -91,6 +91,20 @@ class SessionState:
         self.last_strategy_errors: list[str] = []
         self.notes: list[str] = []
         self.phase_probe: list[dict] = []
+        # --- v2 -----------------------------------------------------------------
+        #: role id -> {"ore": kind, "x": int, "y": int}: the mine a worker committed
+        #: to.  Mines survive 10 collections, so switching every round is pure
+        #: waste; the lock is released when the mine leaves ``zones``.
+        self.mine_targets: dict[int, dict] = {}
+        #: {"defender": id, "miner": id, "pioneer": id}: stable duties that survive
+        #: death and respawn (role ids are fixed by 接口文档 §1.3.1).
+        self.duties: dict[str, int] = {}
+        #: drone/worker that currently carries the station upgrade voucher
+        self.station_voucher: dict = {}
+        #: unit id -> {"died": round, "revive": round} for respawn bookkeeping
+        self.graves: dict[int, dict] = {}
+        #: how many rounds we have been trying to get the operator home
+        self.recall_since: dict[int, int] = {}
 
     def reset_match(self, match_key: str) -> None:
         self.match_key = match_key
@@ -106,6 +120,11 @@ class SessionState:
         self.last_strategy_errors = []
         self.notes = []
         self.phase_probe = []
+        self.mine_targets = {}
+        self.duties = {}
+        self.station_voucher = {}
+        self.graves = {}
+        self.recall_since = {}
 
 
 class Session:

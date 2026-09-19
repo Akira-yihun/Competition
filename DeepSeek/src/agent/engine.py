@@ -23,6 +23,7 @@ from .tasks.memory import SkillLibrary
 from .tasks.workflow import TaskMachine
 from .world import WorldView
 from . import combat
+from . import journal
 from . import strategy
 from .strategy import TurnPlan
 
@@ -60,7 +61,7 @@ def compute(payload: Any, state: SessionState, deadline: float | None = None,
         if observation.is_day:
             strategy.plan_day(world, plan, cfg, state, machine)
         else:
-            _plan_night(world, plan, cfg, machine)
+            _plan_night(world, plan, cfg, machine, state)
     except Exception as exc:             # never let strategy kill the turn
         import traceback
         plan.note(f"strategy_exception:{type(exc).__name__}:{exc}")
@@ -104,24 +105,34 @@ def compute(payload: Any, state: SessionState, deadline: float | None = None,
     if elapsed > cfg.compute_seconds:
         state.notes.append(f"slow_turn:{elapsed:.2f}s")
 
-    return envelope(result.commands, prompt, plan.execute_cmd)
+    response = envelope(result.commands, prompt, plan.execute_cmd)
+    # R1: one fixed-format block per round, written off the decision path.
+    journal.record(payload, response,
+                   {"notes": state.notes[-24:],
+                    "rejections": [f"{r}:{w}" for r, w in result.rejections],
+                    "gold": observation.gold,
+                    "round": observation.round_no,
+                    "phase": observation.phase_round})
+    return response
 
 
 def _plan_night(world: WorldView, plan: TurnPlan, cfg: Config,
-                machine: TaskMachine) -> None:
+                machine: TaskMachine, state) -> None:
     """At night only defence counts: 1800 actions, zero slack.
 
-    A pioneer that is mid-task is excluded from the tower roster on purpose --
-    task book §5 ends a task the moment the pioneer leaves the 1-cell ring
-    around its task point, so pulling it back to a tower would trade a whole
-    task's score for one night of firepower.
+    A pioneer that is mid-task is only excused from the tower roster while it is
+    standing somewhere safe (R3).  Left in the middle of the map it would be
+    killed by the wave and lose the *next* day's first 20 rounds to the respawn,
+    which costs far more than the task it was guarding; 任务书 §5 ends the task
+    the moment the pioneer leaves the 1-cell ring, and the partial answer already
+    submitted keeps its pass-rate credit.
     """
     excluded = frozenset()
-    if cfg.pioneer_help_defend is False and machine.in_task:
-        pioneer = world.obs.pioneer()
-        if pioneer is not None:
+    pioneer = world.obs.pioneer()
+    if machine.in_task and pioneer is not None:
+        if cfg.night_hold_tasks or world.safe_cell(pioneer.pos):
             excluded = frozenset({pioneer.unit_id})
-    strategy.plan_night(world, plan, cfg, pioneers_excluded=excluded)
+    strategy.plan_night(world, plan, cfg, state, pioneers_excluded=excluded)
 
 
 def _prompt_allowed(state: SessionState, machine: TaskMachine) -> bool:

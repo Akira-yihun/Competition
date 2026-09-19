@@ -135,6 +135,9 @@ class Team:
     last_cmd_result: str = ""
     dead: list[dict] = field(default_factory=list)
     task_done: int = 0
+    #: 任务书 §7: once the station reaches 0 HP the base is destroyed and the
+    #: half is over for that side; survival points stop accruing.
+    base_destroyed: bool = False
 
     def score_total(self) -> int:
         return self.task_score + self.kill_score + self.survival_score
@@ -230,15 +233,26 @@ class Referee:
             return
 
     def _in_build_region(self, pos: tuple[int, int]) -> bool:
+        """任务书 §4.1's 8x8 diagram: build region = footprint distance <= 2."""
         for team in self.teams.values():
             station = next((r for r in team.roles
                             if r["roleType"] == "station"), None)
             if station is None:
                 continue
             anchor = (station["pos"]["x"], station["pos"]["y"])
-            if cheb(pos, anchor) <= 2:
+            if min(cheb(pos, c) for c in footprint(anchor)) <= 2:
                 return True
         return False
+
+    def build_gap(self, side: str, point: tuple[int, int]) -> int | None:
+        """Chebyshev distance from a build cell to the base footprint."""
+        team = self.teams[side]
+        station = next((r for r in team.roles
+                        if r["roleType"] == "station"), None)
+        if station is None:
+            return None
+        anchor = (station["pos"]["x"], station["pos"]["y"])
+        return min(cheb(point, c) for c in footprint(anchor))
 
     # -- phase -------------------------------------------------------------
     @property
@@ -528,6 +542,11 @@ class Referee:
                 return False, "illegal:build not adjacent"
             if self._zone_at(point, zones) is not None:
                 return False, "illegal:build on a neutral zone"
+            # 任务书 §4.1: weapons only in the blue ring (distance 1 from the
+            # base footprint), walls only in the yellow ring (distance 2).
+            gap = self.build_gap(team.type_name, point)
+            if gap != (2 if name == "wall" else 1):
+                return False, "illegal:build outside the build region"
             if name == "wall" and unit["backpack"].count("stone") < 1:
                 return False, "illegal:no stone"
             if name != "wall":
@@ -651,9 +670,7 @@ class Referee:
         if action == "acceptTask":
             for task in team.player_tasks:
                 if task["isValid"] and task["coldDownRounds"] == 0 \
-                        and cheb((unit["pos"]["x"], unit["pos"]["y"]),
-                                 (task["taskPosition"]["x"],
-                                  task["taskPosition"]["y"])) <= 1:
+                        and self._at_task_point(unit, task):
                     team.active_task = {
                         "task": task, "start": self.round,
                         "timeout": task.get("timeoutRounds", 60),
@@ -745,6 +762,23 @@ class Referee:
             team.summoned[key] = team.summoned.get(key, 0) + 1
         unit["backpack"].remove(name)
         return True
+
+    def _at_task_point(self, unit: dict, task: dict) -> bool:
+        """任务书 §4.6.2: task point 2 covers two cells, either one qualifies.
+
+        The judge reports one ``taskPosition`` for the point, but the map carries
+        both cells, so acceptance is measured against every zone cell whose
+        neutralType matches this task's team and index.
+        """
+        wanted = task["taskType"]
+        team = wanted[:len(wanted) - 1] if wanted and wanted[-1].isdigit() else wanted
+        index = wanted[-1] if wanted and wanted[-1].isdigit() else ""
+        pos = (unit["pos"]["x"], unit["pos"]["y"])
+        cells = [(z["pos"]["x"], z["pos"]["y"]) for z in self.zones
+                 if z["neutralType"] == f"{team}TaskPoint{index}"]
+        if not cells:
+            cells = [(task["taskPosition"]["x"], task["taskPosition"]["y"])]
+        return any(cheb(pos, cell) <= 1 for cell in cells)
 
     def _next_unit_id(self, team: Team, name: str) -> int:
         base = 10000 if team.type_name == "challenger" else 20000
@@ -930,12 +964,12 @@ class Referee:
             for key, extra in team.summoned.items():
                 kinds += [f"{key[0].lower()}{key[1:]}Robot"] * extra
             team.summoned = {}
-            anchor = (5, 6) if side == "challenger" else (33, 24)
+            anchor = self._wave_origin(side)
             for index, kind in enumerate(kinds):
                 if kind not in ROBOT:
                     continue
-                spot = (anchor[0] + index % 6, anchor[1] + index // 6)
-                if not (0 <= spot[0] < WIDTH and 0 <= spot[1] < HEIGHT):
+                spot = self._wave_spot(anchor, side, index)
+                if spot is None:
                     continue
                 self.robots.append({
                     "id": self.next_robot, "pos": {"x": spot[0], "y": spot[1]},
@@ -943,6 +977,29 @@ class Referee:
                     "abnormalState": "", "targetTeam": enemy_type,
                 })
                 self.next_robot += 1
+
+    def _wave_origin(self, side: str) -> tuple[int, int]:
+        """Where the wave appears: the base's **map-interior** side.
+
+        The task book does not publish the spawn rule, but the user's observation
+        from the live platform is unambiguous -- 机器人总是从基地靠近地图内侧的
+        那个方向攻击过来 -- and the v1 referee spawned the challenger's wave in the
+        bottom-left corner, i.e. from *behind* the base, which made every tower
+        orientation equally good and hid exactly the layout bug R2 fixes.
+        """
+        return (18, 14) if side == "challenger" else (23, 17)
+
+    def _wave_spot(self, anchor: tuple[int, int], side: str,
+                   index: int) -> tuple[int, int] | None:
+        """Blob layout: 5 per row, marching away from the base."""
+        x = anchor[0] + index % 5 if side == "challenger" else anchor[0] - index % 5
+        y = (anchor[1] - index // 5 if side == "challenger"
+             else anchor[1] + index // 5)
+        if not (0 <= x < WIDTH and 0 <= y < HEIGHT):
+            return None
+        if self._zone_at((x, y)) is not None:
+            return None
+        return (x, y)
 
     def _tick_tasks(self) -> None:
         for team in self.teams.values():
@@ -980,13 +1037,23 @@ class Referee:
                     continue
                 if unit["roleType"] in MOBILE:
                     team.roles.remove(unit)
+                    # 任务书 §4.5.2: a dead role respawns at the base 20 rounds
+                    # into the *next* day, keeping its backpack.
+                    unit["_revive_round"] = self.day * DAY_LEN + 21
                     team.dead.append(unit)
                 elif unit["roleType"] != "station":
                     # 任务书 §4.1: a demolished building's cell becomes walkable
                     team.roles.remove(unit)
-                # the station is left at 0 HP so base destruction stays visible
-            if not any(r["roleType"] == "station" for r in team.roles):
-                team.base_destroyed = True
+                else:
+                    # 任务书 §7: the half ends when a base is destroyed.  The
+                    # station record itself is kept at 0 HP so the destruction
+                    # stays visible in the observation, but the *match state*
+                    # must flip -- v1 only removed the record, which never
+                    # happened, so a base at -4000 HP was still reported alive
+                    # and every local match ran the full 1300 rounds.
+                    unit["health"] = 0
+                    team.base_destroyed = True
+            self._revive_dead(team)
         self.robots = [r for r in self.robots if r["health"] > 0]
 
         if self.phase == DAY_LEN - 1:
@@ -995,15 +1062,55 @@ class Referee:
             for team in self.teams.values():
                 team.llm_calls_today = 0
         # survival scoring is settled by the caller at end of match
-        destroyed = [t for t in self.teams.values()
-                     if not any(r["roleType"] == "station" for r in t.roles)]
+        destroyed = [t for t in self.teams.values() if t.base_destroyed]
         if len(destroyed) == len(self.teams) or self.round >= MAX_ROUNDS:
             self.over = True
         if self.round % DAY_LEN == 0:
             day = self.day
             for team in self.teams.values():
-                if any(r["roleType"] == "station" for r in team.roles):
+                if not team.base_destroyed:
                     team.survival_score += 10 * day
+
+    def _revive_dead(self, team: Team) -> None:
+        """任务书 §4.5.2: revive at the base 20 rounds after the next dawn.
+
+        The v1 referee dropped dead roles for good, which silently removed the
+        pioneer for the rest of a 10-day match and made task throughput look like
+        a strategy failure instead of a simulator gap.
+        """
+        if not team.dead:
+            return
+        station = next((r for r in team.roles if r["roleType"] == "station"),
+                       None)
+        if station is None:
+            return
+        occupied = {p for r in team.roles for p in cells_of(r)}
+        occupied |= {(r["pos"]["x"], r["pos"]["y"]) for r in self.robots}
+        for unit in list(team.dead):
+            if self.round < unit.get("_revive_round", 0):
+                continue
+            spot = None
+            for cell in footprint((station["pos"]["x"], station["pos"]["y"])):
+                for nb in ((cell[0] + dx, cell[1] + dy)
+                           for dx in (-1, 0, 1) for dy in (-1, 0, 1)):
+                    if nb in occupied:
+                        continue
+                    if not (0 <= nb[0] < WIDTH and 0 <= nb[1] < HEIGHT):
+                        continue
+                    if self._zone_at(nb) is not None:
+                        continue
+                    spot = nb
+                    break
+                if spot:
+                    break
+            if spot is None:
+                continue
+            unit["pos"] = {"x": spot[0], "y": spot[1]}
+            unit["health"] = ROLE_HP.get(unit["roleType"], 200)
+            unit["abnormalState"] = ""
+            team.dead.remove(unit)
+            team.roles.append(unit)
+            occupied.add(spot)
 
     def finalize(self) -> dict:
         result = {}
@@ -1014,8 +1121,7 @@ class Referee:
                 "gold": team.gold,
                 "survival": team.survival_score,
                 "tasks_completed": team.task_done,
-                "base_alive": any(r["roleType"] == "station"
-                                  for r in team.roles),
+                "base_alive": not team.base_destroyed,
                 "exceptions": team.metrics.exceptions,
                 "malformed": team.metrics.malformed,
                 "illegal_commands": team.metrics.illegal_commands,

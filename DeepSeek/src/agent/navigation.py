@@ -25,7 +25,7 @@ from .world import WorldView
 
 
 def passable(world: WorldView, moving: Unit, pos: Pos,
-             *, allow_robots: bool) -> bool:
+             *, allow_robots: bool, avoid: frozenset[Pos] = frozenset()) -> bool:
     obs = world.obs
     if not obs.in_bounds(pos):
         return False
@@ -33,6 +33,8 @@ def passable(world: WorldView, moving: Unit, pos: Pos,
         return False
     if pos == moving.pos:
         return True
+    if pos in avoid:                     # soft no-go (e.g. the night-time middle)
+        return False
     if pos in world.blocked_cells():
         return False
     if not allow_robots and pos in world.robot_cells():
@@ -42,7 +44,8 @@ def passable(world: WorldView, moving: Unit, pos: Pos,
 
 def distances_from(world: WorldView, moving: Unit, sources: Iterable[Pos],
                    cfg: Config = DEFAULT,
-                   *, allow_robots: bool = False) -> dict[Pos, int]:
+                   *, allow_robots: bool = False,
+                   avoid: frozenset[Pos] = frozenset()) -> dict[Pos, int]:
     """8-connected BFS distance field from ``sources``.
 
     Chebyshev movement is uniform-cost, so plain BFS is exact and much cheaper
@@ -59,7 +62,8 @@ def distances_from(world: WorldView, moving: Unit, sources: Iterable[Pos],
             continue
         # a source that is itself blocked is only usable if it is our own cell
         if source != origin and not passable(world, moving, source,
-                                             allow_robots=allow_robots):
+                                             allow_robots=allow_robots,
+                                             avoid=avoid):
             continue
         out[source] = 0
         queue.append(source)
@@ -72,7 +76,8 @@ def distances_from(world: WorldView, moving: Unit, sources: Iterable[Pos],
             step = Pos(current.x + dx, current.y + dy)
             if step in out:
                 continue
-            if not passable(world, moving, step, allow_robots=allow_robots):
+            if not passable(world, moving, step, allow_robots=allow_robots,
+                            avoid=avoid):
                 continue
             out[step] = depth + 1
             queue.append(step)
@@ -97,6 +102,7 @@ def next_step(world: WorldView, moving: Unit, goal: Pos,
 
 def search(world: WorldView, moving: Unit, goal: Pos, cfg: Config,
            *, allow_robots: bool = False,
+           avoid: frozenset[Pos] = frozenset(),
            branch_limit: int = 1) -> tuple[Pos | None, list[Pos], int]:
     """A* towards ``goal``.
 
@@ -110,6 +116,8 @@ def search(world: WorldView, moving: Unit, goal: Pos, cfg: Config,
     if goal == moving.pos:
         return [moving.pos], {moving.pos: 0}, 0
     if not obs.in_bounds(goal) or goal in obs.zones:
+        return [], {moving.pos: 0}, -1
+    if goal in avoid:
         return [], {moving.pos: 0}, -1
     if goal in world.blocked_cells():
         return [], {moving.pos: 0}, -1
@@ -135,7 +143,8 @@ def search(world: WorldView, moving: Unit, goal: Pos, cfg: Config,
             step = Pos(current.x + dx, current.y + dy)
             if step in seen:
                 continue
-            if not passable(world, moving, step, allow_robots=allow_robots):
+            if not passable(world, moving, step, allow_robots=allow_robots,
+                            avoid=avoid):
                 continue
             new_cost = cost + 1
             if new_cost >= best.get(step, new_cost + 1):
