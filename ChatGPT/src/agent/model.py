@@ -8,6 +8,8 @@ class PlayerTask:
     valid: bool
     score_reward: int
     gold_reward: int
+    timeout_rounds: int = 30
+    kind: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,6 +111,7 @@ class Turn:
     phase_task: str
     llm_response: str
     raw: dict[str, Any] = field(default_factory=dict)
+    navigation_avoid: dict = field(default_factory=dict)
 
     @classmethod
     def load(cls, payload: dict[str, Any]) -> "Turn":
@@ -140,6 +143,8 @@ class Turn:
                     bool(task.get("isValid")),
                     int(task.get("scoreReward") or 0),
                     int(task.get("goldReward") or 0),
+                    int(task.get("timeoutRounds") or 30),
+                    str(task.get("taskType") or ""),
                 )
                 for task in team.get("playerTasks") or ()
             ),
@@ -147,6 +152,10 @@ class Turn:
             str(payload.get("llmResp") or ""),
             payload,
         )
+
+    def task_cells(self, task):
+        kind=self.zones.get(task.position,'')
+        return tuple(p for p,k in self.zones.items() if kind.endswith(('TaskPoint1','TaskPoint2')) and k==kind) or (task.position,)
 
     def station(self) -> Unit | None:
         for unit in self.ours:
@@ -215,7 +224,9 @@ class Turn:
 
     def blocked(self, moving: Unit) -> frozenset[Pos]:
         cells = {pos for pos, kind in self.zones.items() if kind != LAND}
-        cells.update(self.occupied_cells())
+        for unit in self.ours + self.enemies:
+            if unit.health > 0 and unit.unit_id != moving.unit_id:
+                cells.update(self.footprint(unit))
         cells.discard(moving.pos)
         for robot in self.robots:
             if robot.health > 0:

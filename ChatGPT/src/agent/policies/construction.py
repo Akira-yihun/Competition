@@ -15,7 +15,7 @@ def operator_hub(turn):
     station=turn.station()
     if not station:return None
     x,y=station.pos.x,station.pos.y
-    return Pos(x-2,y-1) if facing(turn)==1 else Pos(x+3,y)
+    return Pos(x-1,y-1) if facing(turn)==1 else Pos(x+2,y)
 
 
 def _tower_sites(turn):
@@ -23,22 +23,35 @@ def _tower_sites(turn):
     if not station:return ()
     x,y=station.pos.x,station.pos.y
     # Three legal inner-ring cells all within one cell of the rear operator hub.
-    sites=([Pos(x-1,y-2),Pos(x-1,y-1),Pos(x-1,y)] if facing(turn)==1 else
-           [Pos(x+2,y+1),Pos(x+2,y),Pos(x+2,y-1)])
+    sites=([Pos(x,y-2),Pos(x-1,y),Pos(x-1,y-2)] if facing(turn)==1 else
+           [Pos(x+1,y+1),Pos(x+2,y-1),Pos(x+2,y+1)])
     return tuple(p for p in sites if turn.land(p))
+
+
+def priority_wall_sites(turn):
+    """The user's twelve '+' cells, mirrored with the base."""
+    station=turn.station()
+    if not station:return ()
+    x,y=station.pos.x,station.pos.y
+    front=x+3 if facing(turn)==1 else x-2
+    cells=[Pos(front,yy) for yy in range(y-3,y+3)]
+    cells.sort(key=lambda p:(abs(p.y-(y-.5)),p.y))
+    xs=range(x,x+3) if facing(turn)==1 else range(x-1,x+2)
+    cells += sorted((Pos(xx,yy) for xx in xs for yy in (y-3,y+2)),
+                    key=lambda p:(abs(p.x-front),p.y))
+    return tuple(p for p in cells if turn.land(p))
 
 
 def wall_sites(turn):
     station=turn.station()
     if not station:return ()
-    x,y=station.pos.x,station.pos.y;direction=facing(turn)
-    front=x+3 if direction==1 else x-2
-    # Front first, then top/bottom from front to rear. Rear middle four stay open.
-    front_cells=[Pos(front, yy) for yy in range(y-3,y+3)]
-    front_cells.sort(key=lambda p:(abs(p.y-(y-.5)),p.y))
-    horizontals=[Pos(xx,yy) for xx in range(x-2,x+4) for yy in (y-3,y+2) if xx!=front]
-    horizontals.sort(key=lambda p:(abs(p.x-front),p.y))
-    return tuple(p for p in front_cells+horizontals if turn.land(p))
+    x,y=station.pos.x,station.pos.y
+    primary=list(priority_wall_sites(turn))
+    # Leave one rear gate permanently open for mining, procurement and respawn.
+    gate=Pos(x-2,y-1) if facing(turn)==1 else Pos(x+3,y)
+    outer=[Pos(xx,yy) for xx in range(x-2,x+4) for yy in range(y-3,y+3)
+           if xx in (x-2,x+3) or yy in (y-3,y+2)]
+    return tuple(primary+[p for p in outer if p not in primary and p!=gate and turn.land(p)])
 
 
 def operator_stands(turn,tower):

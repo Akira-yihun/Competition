@@ -208,9 +208,9 @@ class PackagedHTTPIntegration(HTTPIntegration):
     @classmethod
     def setUpClass(cls):
         cls.extracted = tempfile.TemporaryDirectory(prefix='coregeek-http-package-')
-        archive = ROOT / 'artifacts/coregeek-v0.4.tar.gz'
+        archive = ROOT / 'artifacts/coregeek-v0.7.tar.gz'
         # Always validate current source, never a stale package.
-        subprocess.run([sys.executable, str(ROOT/'tools/package.py')], check=True)
+        subprocess.run([sys.executable, str(ROOT/'tools/package.py'),'--output',str(archive)], check=True)
         with tarfile.open(archive) as package:
             for member in package.getmembers():
                 if member.name.startswith('/') or '..' in Path(member.name).parts or not member.isfile():

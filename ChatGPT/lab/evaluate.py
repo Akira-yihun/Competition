@@ -50,7 +50,7 @@ def main():
     args = parser.parse_args()
     if not 1 <= args.rounds <= 1300: parser.error('--rounds must be 1..1300')
     args.output.mkdir(parents=True, exist_ok=True)
-    os.environ.setdefault('CORE_GEEK_DEBUG_LOG',str(args.output/'debug.ndjson'))
+    os.environ.setdefault('CORE_GEEK_DEBUG_LOG',str(args.output/'rounds.log'))
     initial_hashes = {str(p.relative_to(ROOT)):hashlib.sha256(p.read_bytes()).hexdigest() for directory in (ROOT/'src'/'agent', ROOT/'lab', ROOT/'tools'/'baseline_agent') for p in directory.rglob('*.py')}
     halves = [run(seed,args.rounds,swap,args.output,args.task_profile) for seed in map(int,args.seeds.split(',')) for swap in (False,True)]
     matches = []

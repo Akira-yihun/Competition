@@ -92,12 +92,12 @@ class RevisionTests(unittest.TestCase):
         m=arena();m.round=71;t=decode(m.observation(0));worker=t.workers()[1]
         self.assertGreaterEqual(route(t,worker,[Pos(t.width-2,worker.pos.y)])[1],10**6)
 
-    def test_night_pioneer_evacuates_while_task_model_continues(self):
+    def test_night_pioneer_keeps_working_without_nearby_robots(self):
         m=arena();m.round=71;p=m.observation(0)
         pioneer=next(r for r in p['teamOur']['roles'] if r['roleType']=='pioneer')
         pioneer['pos']=pos((p['mapInfo']['width']//2,10));p['phaseTask']='unfinished task'
         out=compute(p).response
         self.assertTrue(out['prompt'])
-        self.assertEqual(out['roleCommandMap'][str(pioneer['id'])]['action'],'move')
+        self.assertNotIn(str(pioneer['id']),out['roleCommandMap'])
 
 if __name__=='__main__':unittest.main()

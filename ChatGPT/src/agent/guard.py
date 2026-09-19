@@ -60,7 +60,7 @@ def legal(rid, cmd, turn):
         items=cmd.get('item')
         return unit.kind=='pioneer' and not turn.phase_task and len(points)==1 and distance(unit.pos,points[0])<=1 and isinstance(items,list) and all(isinstance(i,str) for i in items) and not (Counter(items)-Counter(unit.backpack))
     if action=='acceptTask':
-        return unit.kind=='pioneer' and not turn.phase_task and any(t.valid and distance(unit.pos,t.position)<=1 for t in turn.tasks)
+        return unit.kind=='pioneer' and not turn.phase_task and any(t.valid and any(distance(unit.pos,p)<=1 for p in turn.task_cells(t)) for t in turn.tasks)
     if action=='submitAnswer':
         return unit.kind=='pioneer' and bool(turn.phase_task) and isinstance(cmd.get('taskAnswer'),str) and 0<len(cmd['taskAnswer'])<=64000
     return False

@@ -10,7 +10,7 @@ def route(turn: Turn, moving: Unit, goals, reserved=(), cautious=True):
     if cautious and night_caution(turn):goals={p for p in goals if safe_cell(turn,p)}
     if moving.pos in goals:
         return None, 0
-    blocked = turn.blocked(moving) | frozenset(reserved)
+    blocked = turn.blocked(moving) | frozenset(reserved) | frozenset(turn.navigation_avoid.get(moving.unit_id, ()))
     goals = {p for p in goals if turn.land(p) and p not in blocked}
     if not goals:
         return None, 10**6

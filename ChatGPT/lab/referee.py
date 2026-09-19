@@ -138,6 +138,12 @@ class Match:
         visible = [r for r in enemy['roles'] if r['roleType'] in ('station', 'wall') or any(min(dist(xy(r), p) for p in cells(u)) <= 4 for u in t['roles'])]
         return copy.deepcopy(dict(roundNo=self.round, mapInfo=dict(width=41, height=32, zones=self.zones), teamOur={k: t[k] for k in ('type', 'teamId', 'teamName', 'goldNum', 'totalScore', 'roles', 'playerTasks')}, teamEnemy=dict(roles=visible), robot=dict(roles=self.robots), phaseTask=t['phaseTask'], llmResp=t['llmResp'], lastCmdResult=t['lastCmdResult'], lastRoundRoleActionResults=t['results'], lastSummonTreasureResult=0, worldNews=dict(officialNews='LOCAL FIXTURE: fixed mineral prices.', folkLegends=''), vendorShopList=[dict(name=k, price=v) for k, v in [('stone', 1), ('iron', 2), ('copper', 3)]], weaponShopList=[dict(name=k, price=v) for k, v in PRICES.items()], errors=t['errors']))
 
+    def task_distance(self,t,index,p):
+        point=xy(t['playerTasks'][index]['taskPosition'])
+        kind=next((z['neutralType'] for z in self.zones if xy(z)==point),'')
+        cells=[xy(z) for z in self.zones if kind and z['neutralType']==kind] or [point]
+        return min(dist(p,q) for q in cells)
+
     def end_task(self, t):
         if t['active'] is not None:
             task = t['playerTasks'][t['active']['index']]
@@ -262,7 +268,7 @@ class Match:
             if t['active'] is not None:
                 pioneer = next((r for r in t['roles'] if r['roleType'] == 'pioneer'), None)
                 point = xy(t['playerTasks'][t['active']['index']]['taskPosition'])
-                if pioneer is None or dist(xy(pioneer), point) > 1: self.end_task(t)
+                if pioneer is None or self.task_distance(t,t['active']['index'],xy(pioneer)) > 1: self.end_task(t)
             survivors = []
             for r in t['roles']:
                 r['health'] -= damage[r['id']]
@@ -365,7 +371,7 @@ class Match:
         if action == 'acceptTask':
             if r['roleType'] != 'pioneer' or t['active'] is not None: return False
             for n, task in enumerate(t['playerTasks']):
-                if task['isValid'] and dist(xy(r), xy(task['taskPosition'])) <= 1:
+                if task['isValid'] and self.task_distance(t,n,xy(r)) <= 1:
                     t['active'] = dict(index=n, start=self.round)
                     t['phaseTask'] = 'LOCAL FIXTURE 自进化任务：请计算 6 × 7。最终 taskAnswer 必须是字符串 42。可调用命令获得 fixture 结果。'
                     self.metrics[side]['accepted_tasks'] += 1

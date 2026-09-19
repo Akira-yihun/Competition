@@ -137,17 +137,17 @@ class IntelligenceTests(unittest.TestCase):
             t=decode(p);commands={};economy._upgrade(t,t.workers()[0],500,set(),commands,set())
             self.assertEqual(commands[10010]['name'],expected)
 
-    def test_held_upgrade_is_used_after_dusk_recall(self):
-        m=Match();p=m.observation(0);p['roundNo']=71;t=decode(p);p['teamOur']['roles'][0]['pos']=construction.operator_hub(t).dump()
+    def test_held_upgrade_is_used_before_dusk_recall(self):
+        m=Match();p=m.observation(0);p['roundNo']=70;t=decode(p);p['teamOur']['roles'][0]['pos']=construction.operator_hub(t).dump()
         p['teamOur']['roles'][0]['backpack']=['WeaponUpgradeVoucher1']
         p['teamOur']['roles'] += [unit(10040+i,'rocket',(q.x,q.y)) for i,q in enumerate(construction._tower_sites(t))]
         t=decode(p);commands={};defense.plan(t,list(t.workers()),set(),commands,{})
         self.assertEqual(commands[10010]['action'],'use');self.assertEqual(len(commands),1)
 
-    def test_first_day_both_collect_stone_and_later_only_defender(self):
+    def test_only_defender_collects_stone_from_first_day(self):
         m=Match();p=m.observation(0);p['teamOur']['goldNum']=0;t=decode(p)
         p['teamOur']['roles'] += [unit(10040+i,'rocket',(q.x,q.y)) for i,q in enumerate(construction._tower_sites(t))]
-        for r,expected in [(10,['stone','stone']),(140,['stone','mine'])]:
+        for r,expected in [(10,['stone','mine']),(140,['stone','mine'])]:
             p['roundNo']=r;state={};commands={};economy.plan(decode(p),set(),set(),commands,state)
             self.assertEqual([state['economy_jobs'][str(i)]['kind'] for i in (10010,10012)],expected)
 

@@ -38,5 +38,5 @@ def build(output):
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser()
-    parser.add_argument('--output',type=Path,default=ROOT/'artifacts'/'coregeek-v0.5.tar.gz')
+    parser.add_argument('--output',type=Path,default=ROOT/'artifacts'/'coregeek-v0.7.tar.gz')
     build(parser.parse_args().output.resolve())

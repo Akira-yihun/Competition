@@ -6,12 +6,27 @@ import json
 from pathlib import Path
 
 
+def events(path):
+    request=None
+    for line in path.open(encoding='utf-8'):
+        try:
+            if line.startswith('req {'):request=json.loads(line[4:]);continue
+            if line.startswith('rsp {') and request is not None:
+                response=json.loads(line[4:]);yield {'schema':'coregeek-debug/1','event':'decision',
+                    'round':request.get('roundNo'),'side':request.get('teamOur',{}).get('type'),
+                    'phaseTask':request.get('phaseTask',''),'prompt':response.get('prompt',''),
+                    'executeCmd':response.get('executeCmd',''),'commands':response.get('roleCommandMap',{}),
+                    'submittedAnswers':{k:c['taskAnswer'] for k,c in response.get('roleCommandMap',{}).items() if c.get('action')=='submitAnswer'}}
+                request=None;continue
+            if not line.startswith('diagnostics '):
+                event=json.loads(line)
+                if isinstance(event,dict) and event.get('schema')=='coregeek-debug/1':yield event
+        except ValueError:continue
+
+
 def summarize(path):
     counts=Counter();reasons=Counter();errors=Counter();submitted=[];night=Counter()
-    for line in path.open(encoding='utf-8'):
-        try:event=json.loads(line.removeprefix('diagnostics '))
-        except ValueError:continue  # Startup banner may share stdout.
-        if not isinstance(event,dict) or event.get('schema')!='coregeek-debug/1':continue
+    for event in events(path):
         counts['events']+=1
         counts['dropped_events']+=event.get('dropped_events',0)
         if event.get('event')!='decision':continue

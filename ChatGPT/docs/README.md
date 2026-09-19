@@ -1,6 +1,6 @@
 # CoreGeek 策略与迭代工程交接包
 
-本目录位于 `CoreGeek/ChatGPT/docs/`。01—04 与 REVIEW 保留 2026-09-17 的历史设计结论；最新实现、验证和目录定义见 [v0.5 优化归档](design/06-v05目录迁移与策略优化.md) 与 [工程 README](../README.md)。工作区根是 `2026 HW Comp/`，Git 根是 `CoreGeek/`，运行命令的工程根是 `CoreGeek/ChatGPT/`。
+本目录位于 `CoreGeek/ChatGPT/docs/`。01—04 与 REVIEW 保留 2026-09-17 的历史设计结论；最新实现、验证和目录定义见 [v0.7 实施归档](design/08-v07角色目标与沙盒任务实施.md) 与 [工程 README](../README.md)。工作区根是 `2026 HW Comp/`，Git 根是 `CoreGeek/`，运行命令的工程根是 `CoreGeek/ChatGPT/`。
 
 ## 阅读入口
 
@@ -19,7 +19,7 @@
 
 当前 Git 基线为 `e8dc40893232b0a82295c47c1a5ad018b44be7b4`。交付前工作树已有 `.gitignore` 修改和未跟踪 `docs/`，本次保留这些内容，所有新增归档均在本目录。
 
-## 当前完成程度
+## 历史交接状态（2026-09-17，当前实现见页首链接）
 
 已完成设计、配置模板与文档自检工具；**尚未实现或运行闭环 runner，也未连接平台、修改策略、提交代码、上传或实战评估**。接口文档只定义逐回合游戏 HTTP 协议，不含上传、编译、对战、日志下载的网站 API。这些接口保留占位，未确认时必须阻断相关远程阶段。
 
@@ -27,7 +27,7 @@
 
 下一步将 [04 中的启动指令](04-执行Agent手册.md#可直接复制给另一个-agent-的启动指令) 交给开发 Agent。它可以先做本地 runner/mock、协议可靠性及日志实现，待填完平台接口后再跑基线和策略实验。
 
-文档自检（在 CoreGeek 根执行）：
+文档自检（在 CoreGeek/ChatGPT 工程根执行）：
 
 ```bash
 python3 docs/reference/check_docs.py

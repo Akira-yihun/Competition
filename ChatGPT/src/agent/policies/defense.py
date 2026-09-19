@@ -5,6 +5,7 @@ from ..protocol import move_command, attack_command
 from .construction import operator_hub, operator_stands, upgrade_order
 from .combat import _attack_targets
 from .roles import assign
+from ..objectives import goal
 
 
 def should_recall(turn,role,state=None):
@@ -17,8 +18,10 @@ def should_recall(turn,role,state=None):
     sticky=memory.get('defense',{})
     if sticky.get('day')==day and sticky.get('mobilized'):return True
     hub=operator_hub(turn)
-    length=route(turn,role,[hub] if hub else operator_stands(turn,turn.weapons()[0]))[1]
-    return phase>=65 or length<10**6 and 70-phase<=length+3
+    length=route(turn,role,[hub] if hub else operator_stands(turn,turn.weapons()[0]),cautious=False)[1]
+    failures=memory.get('movement_failures',{}).get(str(role.unit_id),{}).get('count',0)
+    chores=sum('UpgradeVoucher' in i and not i.startswith('Station') for i in role.backpack)
+    return phase>=68 or length<10**6 and 70-phase<=length+chores+3+min(failures,4)
 
 
 def plan(turn,available,reserved,commands,state=None):
@@ -27,6 +30,7 @@ def plan(turn,available,reserved,commands,state=None):
     if worker is None or worker not in available or not should_recall(turn,worker,state):return set()
     state['defense']={'day':(turn.round_no-1)//130,'mobilized':[str(worker.unit_id)]}
     towers=turn.weapons();hub=operator_hub(turn)
+    goal(state,turn,worker,'defend',hub,'夜前回防并保持操作位，冷却就绪即攻击')
     goals=[hub] if hub and all(distance(hub,t.pos)<=1 for t in towers) else [p for t in towers for p in operator_stands(turn,t)]
     step,length=route(turn,worker,goals,reserved,cautious=False) if goals else (None,10**6)
     state['defense_assignments']=[{'role':worker.unit_id,'tower':t.unit_id,'distance':distance(worker.pos,t.pos),'path_length':length} for t in towers]
@@ -36,12 +40,12 @@ def plan(turn,available,reserved,commands,state=None):
         reserved.add(worker.pos)
         for tower in sorted(towers,key=lambda t:upgrade_order(turn,t)):
             voucher=f'WeaponUpgradeVoucher{tower.level}'
-            if tower.level<3 and voucher in worker.backpack and distance(worker.pos,tower.pos)<=1:
+            if turn.is_day and tower.level<3 and voucher in worker.backpack and distance(worker.pos,tower.pos)<=1:
                 commands[worker.unit_id]={'action':'use','name':voucher,'targetPos':[tower.pos.dump()]}
                 return {worker.unit_id}
         if not turn.is_day:
             last=state.get('last_fired',{})
-            ready=sorted((t for t in towers if t.cooldown==0 and distance(worker.pos,t.pos)<=1),key=lambda t:(last.get(str(t.unit_id),-1),-t.level,t.unit_id))
+            ready=sorted((t for t in towers if t.cooldown==0 and distance(worker.pos,t.pos)<=1),key=lambda t:(-t.level,last.get(str(t.unit_id),-1),t.unit_id))
             for tower in ready:
                 targets=_attack_targets(turn,tower,{r.robot_id:r.health for r in turn.robots})
                 if targets:
@@ -68,6 +72,7 @@ def emergency_upgrade(turn,state,reserved,commands):
                  and (not team or not r.target_team or r.target_team==team)
                  and min(distance(r.pos,p) for p in turn.footprint(station))<=5)
     if station.health>=100 and station.health>incoming:return False
+    goal(state,turn,worker,'emergency_base_upgrade',station.pos,'基地低血或两回合内致命，优先用券回血')
     if min(distance(worker.pos,p) for p in turn.footprint(station))<=1:
         commands[worker.unit_id]={'action':'use','name':name,'targetPos':[station.pos.dump()]}
     else:

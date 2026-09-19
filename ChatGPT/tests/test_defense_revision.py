@@ -27,7 +27,10 @@ class DefenseRevisionTests(unittest.TestCase):
             rear=s.x-2 if side==0 else s.x+3
             self.assertEqual(len(corners),3)
             self.assertTrue(all(p.x==front for p in walls[:6]))
-            self.assertFalse(any(Pos(rear,y) in walls for y in range(s.y-2,s.y+2)))
+            gate=Pos(rear,s.y-1 if side==0 else s.y)
+            self.assertNotIn(gate,walls)
+            self.assertEqual(len(construction.priority_wall_sites(t)),12)
+            self.assertEqual(min(distance(construction.operator_hub(t),p) for p in t.footprint(t.station())),1)
             self.assertTrue(all(distance(p,construction.operator_hub(t))<=1 for p in corners))
 
     def test_three_towers_and_adjacent_night_operators_both_sides(self):
@@ -91,9 +94,8 @@ class TaskDiagnosticTests(unittest.TestCase):
         self.assertEqual(s.decide(payload(2,'task'))['prompt'],'')
         self.assertEqual(s.state['task']['pending'],pending)
         p=payload(3,'task');p['llmResp']=model_reply(first,taskAnswer='42')
-        second=s.decide(p);self.assertFalse(second['roleCommandMap'])
-        p=payload(4,'task');p['llmResp']=model_reply(second,taskAnswer='42')
-        self.assertEqual(s.decide(p)['roleCommandMap']['10011']['taskAnswer'],'42')
+        second=s.decide(p)
+        self.assertEqual(second['roleCommandMap']['10011']['taskAnswer'],'42')
 
     def test_plaintext_news_task_answer_and_failure_reason(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -104,12 +106,14 @@ class TaskDiagnosticTests(unittest.TestCase):
                 p=payload(3,'调测任务');p['llmResp']='42';s.decide(p)
                 p=payload(4,'调测任务');p['llmResp']='42';s.decide(p)
                 flush()
-            events=[json.loads(l.removeprefix('diagnostics ')) for l in path.read_text().splitlines() if l.startswith('diagnostics ')]
-            self.assertIn('矿价变化',events[0]['worldNews'])
-            self.assertEqual(events[0]['phaseTask'],'调测任务')
-            self.assertEqual(events[1]['llmResp'],'{broken')
-            self.assertEqual(events[1]['taskState']['last_parse_reason'],'malformed_json')
-            self.assertEqual(events[3]['submittedAnswers'],{'10011':'42'})
+            lines=path.read_text().splitlines()
+            reqs=[json.loads(l[4:]) for l in lines if l.startswith('req {')]
+            answers=[json.loads(l[len('submitAnswer '):]) for l in lines if l.startswith('submitAnswer ')]
+            self.assertEqual(reqs[0]['worldNews']['officialNews'],'矿价变化')
+            self.assertEqual(reqs[0]['phaseTask'],'调测任务')
+            self.assertEqual(reqs[1]['llmResp'],'{broken')
+            self.assertIn({'10011':'42'},answers)
+            self.assertFalse(any(l.startswith('diagnostics ') for l in lines))
             before=path.read_bytes()
             with patch.dict(os.environ,{'CORE_GEEK_DEBUG_LOG':'off'}):Session().decide(payload());flush()
             self.assertEqual(path.read_bytes(),before)

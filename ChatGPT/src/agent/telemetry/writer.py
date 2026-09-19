@@ -30,7 +30,10 @@ def format_event(event):
         ('rsp llm调用prompt',rsp.get('prompt','')),('req executecmd结果',req.get('lastCmdResult','')),
         ('rsp executecmd命令',rsp.get('executeCmd',''))):
         lines.append(label+' '+dump(value))
-    lines.append('diagnostics '+dump({k:v for k,v in event.items() if k not in ('req','rsp')}))
+    lines.append('submitAnswer '+dump({rid:c.get('taskAnswer','') for rid,c in rsp.get('roleCommandMap',{}).items() if c.get('action')=='submitAnswer'}))
+    if event.get('rolePlans'):lines.append('角色目标 '+dump(event['rolePlans']))
+    if event.get('error') or event.get('dropped_events'):
+        lines.append('日志状态 '+dump({'error':event.get('error'),'dropped_events':event.get('dropped_events',0)}))
     return '\n'.join(lines)+'\n'
 
 
