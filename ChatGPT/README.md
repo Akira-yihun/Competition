@@ -17,7 +17,7 @@ bash run.sh 8080
 - `policies/`：`economy.py` 防御工日程、`mining.py` 采矿与集中售卖、`pioneer.py` 任务站位，以及建设、防御、战斗算法。
 - `tasks/`：任务实例、模型/命令反馈关联、有限证据记忆。结束原因不明的记录不会冒充成功SOP。
 - `lab/`：独立近似裁判、任务fixture、完整换边评测和回放。
-- `loop/`：本地打包→模拟→报告的可恢复流程；未配置的官方接口返回BLOCKED_CONFIG。
+- `loop/`：本地打包→模拟→报告的可恢复流程；正式平台流程由外层执行 Agent 调用已安装的比赛平台 skill，见 docs/02-Loop工程计划.md；现有 CLI 尚无 skill 桥接。
 
 `brain.decide(payload)` 是兼容单帧调用。连续比赛使用 `Session.decide` 或HTTP服务，任务记忆由主进程保存，计算子进程只返回状态提案。相同回合相同输入重放缓存；冲突输入不推进状态；跳号丢弃无法关联的待处理反馈；超时不提交子进程的中间状态。
 
