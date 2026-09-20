@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CoreGeek encrypted log plaintext event v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "run_id", "build_sha", "config_sha", "match_id", "half_id", "team_id", "side", "process_id", "seq", "round_no", "observed_round_no", "request_id", "event_type", "data", "prev_cipher_sha256", "dropped_events"],
+  "properties": {
+    "schema_version": {"const": "cg-log-event/1"},
+    "run_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "build_sha": {"type": "string", "pattern": "^([a-f0-9]{40}|[a-f0-9]{64})$"},
+    "config_sha": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "match_id": {"type": ["string", "null"], "maxLength": 256},
+    "half_id": {"type": ["string", "null"], "maxLength": 256},
+    "team_id": {"type": ["string", "null"], "maxLength": 256},
+    "side": {"enum": ["challenger", "defender", null]},
+    "process_id": {"type": "string", "pattern": "^[a-f0-9]{32}$"},
+    "seq": {"type": "integer", "minimum": 0},
+    "round_no": {"type": ["integer", "null"], "minimum": 0},
+    "observed_round_no": {"type": ["integer", "null"], "minimum": 0},
+    "request_id": {"type": ["string", "null"], "maxLength": 128},
+    "event_type": {"enum": ["session_start", "turn", "feedback", "task", "news", "snapshot", "error", "session_end"]},
+    "data": {"type": "object", "description": "Event-specific business fields follow section 2 of the logging design. Semantic validation remains required."},
+    "prev_cipher_sha256": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"},
+    "dropped_events": {"type": "integer", "minimum": 0}
+  }
+}
