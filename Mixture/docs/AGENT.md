@@ -10,4 +10,4 @@ README记录当前使用方式，交接AGENT.md记录接手路径与长期不变
 
 检查：在工程根运行 `python3 -B docs/reference/check_docs.py`。它覆盖本docs目录的链接、JSON与来源快照，但不等于策略测试，也不覆盖所有根／源码AGENT.md的链接；新增交接链接需单独检查。来源快照若变更，先解释官方材料版本变动，不能随便重写哈希使校验变绿。
 
-本次交接记录见 [09-DeepSeek接手文档归档](design/09-DeepSeek接手文档归档.md)，最近一轮实现与验证见 [12-多agent分工与自进化任务实现](design/12-多agent分工与自进化任务实现.md)。
+本次交接记录见 [09-DeepSeek接手文档归档](design/09-DeepSeek接手文档归档.md)，最近一轮实现与验证见 [12-多agent分工与自进化任务实现](design/12-多agent分工与自进化任务实现.md)；下一步方案复盘与协作/收益函数设计见 [13-方案复盘与多agent协作及统一收益函数设计](design/13-方案复盘与多agent协作及统一收益函数设计.md)。
