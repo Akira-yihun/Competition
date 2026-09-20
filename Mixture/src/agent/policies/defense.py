@@ -1,9 +1,14 @@
-"""One worker operates the rear rocket battery, respecting observed cooldowns."""
+"""One worker operates the rear rocket battery, respecting observed cooldowns.
+
+Night targeting is delegated to ``agents/attack_agent`` (threat filter + value
+estimate) and the situation report to ``agents/defense_agent``; this module keeps
+the movement, cooldown rotation and emergency-upgrade rules.
+"""
 from ..model import distance
 from ..navigation import route
 from ..protocol import move_command, attack_command
+from ..agents import attack_agent, blackboard, defense_agent
 from .construction import operator_hub, operator_stands, upgrade_order
-from .combat import _attack_targets
 from .roles import assign
 from ..objectives import goal
 
@@ -44,14 +49,24 @@ def plan(turn,available,reserved,commands,state=None):
                 commands[worker.unit_id]={'action':'use','name':voucher,'targetPos':[tower.pos.dump()]}
                 return {worker.unit_id}
         if not turn.is_day:
+            report = defense_agent.assess(turn, state)
             last=state.get('last_fired',{})
             ready=sorted((t for t in towers if t.cooldown==0 and distance(worker.pos,t.pos)<=1),key=lambda t:(-t.level,last.get(str(t.unit_id),-1),t.unit_id))
             for tower in ready:
-                targets=_attack_targets(turn,tower,{r.robot_id:r.health for r in turn.robots})
+                # Attack sub-agent: only robots targeting our base are threats, and the
+                # chosen aim set is scored for damage, kills and splash before firing.
+                targets, analysis = attack_agent.choose(turn, tower, state)
+                state['attack_assessment'] = analysis
+                blackboard.write(state, 'attack', analysis, turn.round_no)
                 if targets:
                     commands[tower.unit_id]=attack_command(worker.unit_id,targets)
                     state.setdefault('last_fired',{})[str(tower.unit_id)]=turn.round_no
+                    goal(state,turn,worker,'defend',hub,
+                         f"第{turn.round_no}回合开火：{analysis.get('reason','')}"
+                         f"（预计伤害{analysis.get('damage',0)}，击杀{len(analysis.get('kills',[]))}）")
                     break
+            if report.get('summary'):
+                state['defense_report'] = report['summary']
     return {worker.unit_id}
 
 

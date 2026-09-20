@@ -1,11 +1,19 @@
-"""Local mineral targets, sticky claims, and safe batched sales."""
+"""Local mineral targets, sticky claims, and safe batched sales.
+
+Planning (sell vs collect, price/funding reasoning, robot-aware routing) lives in
+``agents/economy_agent``; this module keeps the mine lock, value ranking and the
+actual collect/sell commands.
+"""
 from dataclasses import replace
 from ..model import Pos, distance
 from ..navigation import route, night_caution, safe_cell
 from ..world import _neighbours
 from ..protocol import move_command, sell_command
 from ..objectives import goal
+from ..agents import economy_agent
 from ..intelligence.news import mine_value, should_hold
+
+SURVEY_INTERVAL = 5  # mine survey costs one path per mine, so refresh it periodically
 
 
 def local(turn, p):
@@ -22,7 +30,8 @@ def behind(turn,p):
 
 
 def move_to(turn, worker, target, reserved, commands, cautious=True):
-    step,length=route(turn,worker,_neighbours(target),reserved,cautious=cautious)
+    """Robot-aware step: avoid the 3-cell attack ring, fall back to a plain route."""
+    step,length=economy_agent.route_to(turn,worker,target,reserved,cautious=cautious)
     if step is not None:
         commands[worker.unit_id]=move_command(step);reserved.add(step)
     return length
@@ -114,11 +123,17 @@ def sell(turn,worker,state,reserved,commands,force=False,keep_stone=0):
 
 
 def plan_miner(turn,worker,state,reserved,commands):
-    # Funds needed for the first weapon/base vouchers justify an early sale.
-    prices={i['name']:i['price'] for i in turn.raw.get('vendorShopList',[]) if isinstance(i,dict) and 'name' in i and 'price' in i}
-    liquid=sum(worker.backpack.count(k)*prices.get(k,v) for k,v in {'stone':1,'iron':2,'copper':3}.items())
-    needed=100 if any(t.level==1 for t in turn.weapons()) else 150
-    force=turn.is_day and turn.gold<needed<=turn.gold+liquid
-    if sell(turn,worker,state,reserved,commands,force=force):return
-    if not worker.backpack_full and collect(turn,worker,state,reserved,commands):return
-    goal(state,turn,worker,'safe_wait',worker.pos,'满包等待商路开放或暂时没有可达的本地安全矿')
+    # Economy agent: mine/price/position survey (periodic) plus the sell-or-collect call.
+    survey=state.get('economy_survey') or {}
+    if survey.get('round',0)<=turn.round_no-SURVEY_INTERVAL:
+        economy_agent.survey(turn,state,worker)
+    decision=economy_agent.plan(turn,worker,state,reserved)
+    # Funds needed for the first weapon/base vouchers justify an early sale; the
+    # economy agent reports that as force=True with reason defense_funding.
+    if decision['kind']=='sell':
+        if sell(turn,worker,state,reserved,commands,force=decision.get('force',False),
+                keep_stone=decision.get('keep_stone',0)):return
+    if decision['kind'] in ('sell','collect') and not worker.backpack_full:
+        if collect(turn,worker,state,reserved,commands):return
+    goal(state,turn,worker,'safe_wait',worker.pos,
+         f"满包等待商路开放或暂时没有可达的本地安全矿（经济判断：{decision['reason']}）")

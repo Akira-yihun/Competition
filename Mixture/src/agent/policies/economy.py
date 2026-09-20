@@ -1,11 +1,17 @@
-"""Defender's daily gather/service/home cycle and independent economic worker."""
+"""Defender's daily gather/service/home cycle and independent economic worker.
+
+The day schedule stays here; the *what and why* comes from ``agents/defense_agent``
+(situation report + ordered work plan + small stone reserve) and
+``agents/economy_agent`` (survey, selling timing, robot-aware routing).
+"""
 from dataclasses import replace
-from ..model import distance
+from ..model import Pos, distance
 from ..navigation import route
 from ..protocol import build_command
 from ..rules import SHOP_PRICES
 from ..world import _neighbours
 from ..objectives import goal
+from ..agents import defense_agent, economy_agent
 from .roles import assign
 from .construction import (_tower_sites, TOWER_LOADOUT, wall_sites, priority_wall_sites,
                            wall_preserves_access, upgrade_order, operator_hub)
@@ -107,7 +113,8 @@ def _construct(turn,worker,sites,name,state,reserved,commands):
 
 
 def maintenance_sites(turn):
-    return priority_wall_sites(turn) if turn.round_no<=130 else wall_sites(turn)
+    """Wall cells worth maintaining (delegated so one module owns the layout rule)."""
+    return defense_agent.maintenance_sites(turn)
 
 
 def _trip_cost(turn,worker,stops,hub,reserved):
@@ -133,27 +140,48 @@ def plan_defender(turn,worker,state,reserved,commands):
     if not turn.is_day:
         goal(state,turn,worker,'defend',hub,'夜间固定操作位等待冷却或目标')
         return
+    # Situation report + ordered next-day plan (assessment, damage, economy, ETAs).
+    plan=defense_agent.work_plan(turn,state,worker)
+    reserve=plan['stone_reserve']
+    switch=defense_agent.log_reason(state,plan)
+    if switch['switched']:
+        # Task switches are explicit: keep the previous job and the reason for review.
+        state['defense_task_switch']=switch
+        state.setdefault('defense_switch_history',[]).append({'round':turn.round_no,**switch})
+        del state['defense_switch_history'][:-12]
     if turn.vendor() and distance(worker.pos,turn.vendor())<=1 and any(k in worker.backpack for k in ('iron','copper')):
-        if mining.sell(turn,worker,state,reserved,commands,force=True,keep_stone=len(maintenance_sites(turn))):return
+        if mining.sell(turn,worker,state,reserved,commands,force=True,keep_stone=reserve):return
     if len(turn.weapons())<3 and turn.gold>=25:
         if _construct(turn,worker,_tower_sites(turn),'rocket',state,reserved,commands):return
     missing=[p for p in maintenance_sites(turn) if p not in turn.occupied_cells()]
+    # Repair route: nearest-neighbour order over the walls that still need work, so the
+    # worker does not zig-zag between opposite ends of the ring. Each ordering step is a
+    # path search, so it is cached per day instead of recomputed every round.
+    cache=state.get('defense_route')
+    key=[p.dump() for p in sorted(missing,key=lambda p:(p.x,p.y))]
+    if not isinstance(cache,dict) or cache.get('day')!=day or cache.get('sites')!=key:
+        ordered,_=defense_agent.repair_order(turn,worker,missing,reserved)
+        cache={'day':day,'sites':key,'order':[item['site'] for item in ordered]}
+        state['defense_route']=cache
+    planned=[Pos.load(item) for item in cache['order']]
+    route_order=planned+[p for p in missing if p not in set(planned)]
     stones=worker.backpack.count('stone')
     return_length=route(turn,worker,[hub],reserved,cautious=False)[1]
     held=sum('UpgradeVoucher' in item and not item.startswith('Station') for item in worker.backpack)
     # Reserve time for the walk home, carried upgrades and construction. Never start
     # a trip merely because there are enough coins without checking its completion.
+    # Stone beyond the reserve is cargo to sell, not stock to hoard.
     home_work=2*min(stones,len(missing))+held
     if left<=return_length+home_work+5:cycle['phase']='home'
     if cycle['phase']=='gather':
         options=purchase_options(turn,worker,max(0,turn.gold-25*max(0,3-len(turn.weapons()))))
         cargo=sum(worker.backpack.count(k) for k in ('iron','copper'))
-        stock_ready=not missing or stones>=min(10,len(missing))
+        stock_ready=not missing or stones>=min(reserve,len(missing))
         if stock_ready and (stones or cargo>=20 or options):
             cycle['phase']='service' if options or cargo else 'home'
         elif missing and not stock_ready:
             if mining.collect(turn,worker,state,reserved,commands,stone=True,
-                              latest_return=max(0,left-min(len(missing),10)-5)):return
+                              latest_return=max(0,left-min(len(missing),reserve+5)-5)):return
             cycle['phase']='home' if stones else 'service'
         elif not worker.backpack_full:
             if mining.collect(turn,worker,state,reserved,commands,latest_return=max(0,left-12)):return
@@ -162,18 +190,19 @@ def plan_defender(turn,worker,state,reserved,commands):
         shop=next((p for p,k in turn.zones.items() if k=='weaponShop'),None)
         vendor=turn.vendor()
         options=purchase_options(turn,worker,max(0,turn.gold-25*max(0,3-len(turn.weapons()))))
-        sale_cargo=sum(worker.backpack.count(k) for k in ('iron','copper'))+max(0,stones-len(missing))
+        # Surplus stone above the reserve goes to market with the ore.
+        sale_cargo=sum(worker.backpack.count(k) for k in ('iron','copper'))+max(0,stones-reserve)
         destinations=([vendor] if sale_cargo and vendor else [])+([shop] if options and shop else [])
         travel=_trip_cost(turn,worker,destinations,hub,reserved)+home_work+5
         if cycle.get('serviced') or left<=travel:
             cycle['phase']='home'
         else:
-            if sale_cargo and mining.sell(turn,worker,state,reserved,commands,force=True,keep_stone=len(missing)):return
+            if sale_cargo and mining.sell(turn,worker,state,reserved,commands,force=True,keep_stone=reserve):return
             if options and shop:
                 name,count,price=options[0]
                 if distance(worker.pos,shop)<=1:
                     commands[worker.unit_id]={'action':'buy','name':name,'num':count}
-                    goal(state,turn,worker,'procure',shop,'集中采购，武器优先并保留基地救命券',phase='service')
+                    goal(state,turn,worker,'procure',shop,f'集中采购，武器优先并保留基地救命券（{plan["headline"]}）',phase='service')
                     return
                 if mining.move_to(turn,worker,shop,reserved,commands)<10**6:
                     goal(state,turn,worker,'procure',shop,'一次服务行程完成采购后回基地',phase='service')
@@ -183,7 +212,10 @@ def plan_defender(turn,worker,state,reserved,commands):
         if apply_held(turn,worker,reserved,commands):
             goal(state,turn,worker,'upgrade',hub,'携带券回基地后立即升级；基地券留作救命',phase='home')
             return
-        if stones and missing and _construct(turn,worker,missing,'wall',state,reserved,commands):return
+        if stones and missing and _construct(turn,worker,route_order,'wall',state,reserved,commands):
+            goal(state,turn,worker,'build_wall',route_order[0] if route_order else hub,
+                 f'按最近邻修复路径补墙：{plan["headline"]}',phase='home')
+            return
         if not missing and not purchase_options(turn,worker,turn.gold) and not cycle.get('serviced') and left>return_length+20:
             cycle['phase']='gather'
             if mining.collect(turn,worker,state,reserved,commands,latest_return=left-8):return
@@ -201,7 +233,7 @@ def plan_defender(turn,worker,state,reserved,commands):
         if step is not None:
             from ..protocol import move_command
             commands[worker.unit_id]=move_command(step);reserved.add(step)
-        goal(state,turn,worker,'defend_ready',hub,'当天修缮结束或返岗截止，保留未完成工作到次日',phase='home')
+        goal(state,turn,worker,'defend_ready',hub,f'当天修缮结束或返岗截止，保留未完成工作到次日（{plan["headline"]}）',phase='home')
 
 
 def plan(turn,recalled,reserved,commands,state=None):

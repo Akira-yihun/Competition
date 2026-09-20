@@ -1,4 +1,17 @@
-"""Pure turn orchestration, stable duties and serialized model channels."""
+"""Pure turn orchestration, stable duties and serialized model channels.
+
+Order of work, and who owns what:
+
+1. ``objectives``/``roles`` — persistent duties, movement-failure avoidance;
+2. ``intelligence.news`` — drain the single news channel;
+3. ``policies.economy.healing`` + ``policies.defense.emergency_upgrade`` — life saving;
+4. ``policies.pioneer.safety`` + ``tasks.workflow`` — task channel and sandbox loop;
+5. ``agents.defense_agent`` — situation report and next-day plan (advisory + logs);
+6. ``policies.defense.plan`` — recall and night fire through ``agents.attack_agent``;
+7. ``policies.economy.plan`` — defender schedule, then the miner via ``agents.economy_agent``;
+8. ``agents.task_agent`` — pioneer support duties once the task points are exhausted;
+9. ``agents.review_agent`` + ``guard.validate`` — format audit, then the legal filter.
+"""
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from time import monotonic
@@ -11,6 +24,7 @@ from . import objectives
 from .policies.roles import assign
 from .policies.construction import operator_hub
 from .intelligence import news
+from .agents import defense_agent, review_agent, task_agent
 from .tasks.workflow import advance
 from .guard import validate
 
@@ -29,6 +43,8 @@ def compute(payload, state=None, deadline=None):
     assign(turn,snapshot)
     turn=replace(turn,navigation_avoid=objectives.begin(turn,snapshot))
     consumed=news.ingest(turn,snapshot)
+    # Situation report first: every later decision can explain itself with it.
+    defense_agent.assess(turn,snapshot)
     economy.healing(turn,commands)
     defense.emergency_upgrade(turn,snapshot,reserved,commands)
     # General-news feedback cannot satisfy a task call. A task waits for the
@@ -51,8 +67,23 @@ def compute(payload, state=None, deadline=None):
         pursuing=False
         if not turn.phase_task:
             pursuing=treasure.plan(turn,pioneer,snapshot,reserved,commands)
-        if not pursuing:pioneer_policy.plan(turn,pioneer,snapshot,reserved,commands,response)
+        if not pursuing and task_agent.has_task_work(turn):
+            # Task duty first: accept/travel/solve and keep the one-cell perimeter.
+            pioneer_policy.plan(turn,pioneer,snapshot,reserved,commands,response)
+            task_agent.publish(snapshot,'task','任务点有效：优先推进自进化任务',
+                               snapshot.get('role_plans',{}).get(str(pioneer.unit_id),{}).get('goal'),
+                               turn.round_no)
+        elif not pursuing and pioneer.unit_id not in commands:
+            # No usable task point and no treasure lead: help the defence instead.
+            task_agent.publish(snapshot,'support','任务点耗尽或冷却，转入防御协助',None,turn.round_no)
+            if task_agent.support(turn,pioneer,snapshot,reserved,commands):
+                task_agent.publish(snapshot,'support','已下发防御协助动作',
+                                   snapshot.get('role_plans',{}).get(str(pioneer.unit_id),{}).get('goal'),
+                                   turn.round_no)
     response['roleCommandMap']={str(k):v for k,v in commands.items()}
+    # Review agent: format audit of everything we are about to submit. It only
+    # reports; guard.validate below remains the only filter that drops commands.
+    review_agent.audit(turn,response,snapshot)
     draft=deepcopy(response);response=validate(response,turn)
     if deadline is not None and monotonic()>=deadline:raise TimeoutError('decision deadline')
     objectives.finish(turn,snapshot,response)

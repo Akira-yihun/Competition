@@ -1,18 +1,25 @@
-"""Task-point commitment and local avoidance, independent of worker night zoning."""
+"""Task-point commitment and local avoidance, independent of worker night zoning.
+
+Threats are limited to robots that may attack *our* base: ``robot.targetTeam`` tells
+us which side a robot is marching on (empty means unknown and stays conservative).
+Robots heading for the enemy base walk past the task point without endangering the
+pioneer, so they must not trigger an escape that would abort the task.
+"""
 from ..model import Pos,distance
 from ..navigation import route,STEPS
 from ..world import _neighbours
 from ..protocol import move_command
 from ..objectives import goal
+from ..agents import attack_agent
 
 POWER={'smallRobot':5,'middleRobot':10,'largeRobot':20,'bossRobot':40}
 
 
 def risk(turn,p):
-    # All robots are visible. Use their actual position, not a blanket central-map ban.
-    # A robot at distance four may move into its three-cell attack range next turn.
+    # All robots are visible, but only our-base attackers matter. A robot at distance
+    # four may move into its three-cell attack range next turn, hence the 5-cell window.
     return sum(POWER.get(r.kind,20)*max(0,5-distance(r.pos,p)) for r in turn.robots
-               if r.health>0 and r.abnormal_state!='dizzy')
+               if r.health>0 and r.abnormal_state!='dizzy' and attack_agent.is_threat(turn,r))
 
 
 def task_cells(turn,task):
@@ -32,6 +39,12 @@ def bind(turn,worker,task,state):
 
 
 def safety(turn,worker,state,reserved,commands):
+    """Keep the pioneer alive without leaving the one-cell task perimeter.
+
+    Leaving the task point's surrounding cell aborts the task (task book §5), so the
+    first choice is always a safe cell that still counts as a task stand; only when no
+    such cell exists do we accept a move outside and record the exit reason.
+    """
     binding=state.get('task_binding')
     if turn.phase_task and not binding:
         task=min(turn.tasks,key=lambda t:distance(worker.pos,t.position),default=None)

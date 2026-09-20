@@ -7,9 +7,10 @@
 ```bash
 CORE_GEEK_DEBUG_LOG=off PYTHONPATH=src python3 -B -m unittest discover -s tests -p 'test_v07.py' -v
 CORE_GEEK_DEBUG_LOG=off PYTHONPATH=src python3 -B -m unittest discover -s tests -p 'test_state.py' -v
+CORE_GEEK_DEBUG_LOG=off PYTHONPATH=src python3 -B -m unittest discover -s tests -p 'test_agents.py' -v
 ```
 
-按修改范围替换文件名，不必每个小改动都跑所有比赛。代码交付前完整回归：
+按修改范围替换文件名，不必每个小改动都跑所有比赛。改动角色 agent（防御评估、攻击收益、经济计划、任务协助、自进化循环、审查）时先跑test_agents，再跑test_v07／test_intelligence确认策略合同未被放宽。代码交付前完整回归：
 
 ```bash
 CORE_GEEK_DEBUG_LOG=off PYTHONPATH=src python3 -B -m unittest discover -s tests -v

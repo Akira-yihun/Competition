@@ -14,6 +14,7 @@ bash run.sh 8080
 - `engine.py`、`scheduler.py`、`guard.py`：单回合编排、动作/位置/金币预留、最终校验。
 - `world.py`、`navigation.py`：基地占地、站位、多目标最短路径与失败重选。
 - `objectives.py`：三个角色的持久目标、行动历史、等待原因与移动失败反馈。
+- `agents/`：角色 agent 包（设计见 docs/design/12）。`defense_agent` 输出夜间火力对比、损伤与经济态势和次日工作计划（修复/采购/用券/补石，含回合估算与最近邻修复路径）；`attack_agent` 是防御子 agent，只对攻击我方的机器人按基地距离、攻击力、射程与溅射计算攻击收益；`economy_agent` 记录矿山、价格、工人位置与性价比，决定采集或售卖时机并做机器人攻击圈避让；`task_agent` 保证开拓者任务优先、留在任务点一格内，任务结束后协助防御购买修复包与升级券；`self_evolve` 是任务子 agent 的“上下文→LLM→executeCmd→观察”循环与停止守卫；`review_agent` 审查响应格式；`blackboard` 是各 agent 的共享摘要（全局观察 agent 暂缓实现）。
 - `policies/`：`economy.py` 防御工日程、`mining.py` 采矿与集中售卖、`pioneer.py` 任务站位，以及建设、防御、战斗算法。
 - `tasks/`：任务实例、模型/命令反馈关联、有限证据记忆。结束原因不明的记录不会冒充成功SOP。
 - `lab/`：独立近似裁判、任务fixture、完整换边评测和回放。
@@ -27,6 +28,7 @@ bash run.sh 8080
 
 ```bash
 PYTHONPATH=src python3 -m unittest discover -s tests -v
+PYTHONPATH=src python3 -B -m lab.sandbox_scenario --output artifacts/my-sandbox
 python3 -m lab.evaluate --seeds 1,2,3 --rounds 1300 --output artifacts/v02-simulation
 python3 -m lab.replay --input artifacts/v02-simulation/seed-1-normal.ndjson --output artifacts/v02-replay.ndjson
 python3 tools/package.py --output artifacts/coregeek-v0.7.tar.gz

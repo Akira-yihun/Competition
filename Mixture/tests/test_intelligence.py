@@ -49,9 +49,12 @@ class IntelligenceTests(unittest.TestCase):
     def test_task_calls_do_not_consume_general_quota(self):
         s=Session();out=s.decide(payload(1,'task'))
         p=payload(2,'task');p['llmResp']=model_reply(out,taskUnderstanding={'objective':'probe'});out=s.decide(p)
-        for r in (3,5,7,9):
-            p=payload(r,'task');p['llmResp']=model_reply(out,executeCmd='printf 42');self.assertEqual(s.decide(p)['executeCmd'],'printf 42')
-            p=payload(r+1,'task');p['lastCmdResult']='[exitCode:0]\n42';out=s.decide(p)
+        # Distinct commands/results per round: an identical command with identical
+        # output now trips the self-evolution loop guard (test_agents covers that),
+        # and this test is about the news quota, not about loop detection.
+        for r,command,result in ((3,'printf 41','41'),(5,'printf 42','42'),(7,'printf 43','43'),(9,'printf 44','44')):
+            p=payload(r,'task');p['llmResp']=model_reply(out,executeCmd=command);self.assertEqual(s.decide(p)['executeCmd'],command)
+            p=payload(r+1,'task');p['lastCmdResult']='[exitCode:0]\n'+result;out=s.decide(p)
         self.assertEqual(s.state['intelligence']['used'],0)
         self.assertEqual(context(out)['stage'],'solve')
 

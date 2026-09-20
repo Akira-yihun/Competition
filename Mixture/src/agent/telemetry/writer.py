@@ -32,6 +32,13 @@ def format_event(event):
         lines.append(label+' '+dump(value))
     lines.append('submitAnswer '+dump({rid:c.get('taskAnswer','') for rid,c in rsp.get('roleCommandMap',{}).items() if c.get('action')=='submitAnswer'}))
     if event.get('rolePlans'):lines.append('角色目标 '+dump(event['rolePlans']))
+    # Role-agent reasoning is appended after the existing lines so the historical
+    # line order (and its regression test) stays intact.
+    for label,key in (('防御评估','defenseAssessment'),('防御计划','defensePlan'),('防御任务切换','defenseSwitch'),
+                      ('攻击评估','attackAssessment'),('经济计划','economyPlan'),('任务计划','taskPlan'),
+                      ('自进化循环','selfEvolve'),('审查结果','review')):
+        value=event.get(key)
+        if value:lines.append(label+' '+dump(value))
     if event.get('error') or event.get('dropped_events'):
         lines.append('日志状态 '+dump({'error':event.get('error'),'dropped_events':event.get('dropped_events',0)}))
     return '\n'.join(lines)+'\n'
